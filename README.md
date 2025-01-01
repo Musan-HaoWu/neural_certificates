@@ -13,7 +13,7 @@ Note that Tensorflow is only used for the ```tf.data``` API.
 
 ## Pre-training policies with PPO
 
-To train a policy network on the 2D system task with a Lipschitz threshold fo 4.0 for 100 PPO iterations run:
+To train a policy network on the 2D system task with a Lipschitz threshold 4.0 for 100 PPO iterations run:
 
 ```bash
 python3 rsm_loop.py --env lds_100 --p_lip 4.0 --only_ppo --ppo_iters 100

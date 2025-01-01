@@ -1,15 +1,17 @@
 import argparse
 import os
 import sys
-
+import jax
+import jax.numpy as jnp
 import jax.random
-from gym import spaces
+from gymnasium import spaces
 from tqdm import tqdm
 
 from klax import lipschitz_l1_jax, triangular
-from rl_environments import LDSEnv, InvertedPendulum, CollisionAvoidanceEnv
-from rsm_learner import RSMLearner
-from rsm_verifier import RSMVerifier
+from rl_environments import Vandelpol
+# from rl_environments import LDSEnv, InvertedPendulum, CollisionAvoidanceEnv, Vandelpol
+from rsm_learner import Learner
+from rsm_verifier import Verifier
 import time
 import numpy as np
 import matplotlib.pyplot as plt
@@ -24,25 +26,22 @@ class RSMLoop:
         env,
         lip_factor,
         plot,
-        jitter_grid,
-        soft_constraint,
-        train_p=True,
+        jitter_grid,#???
+        soft_constraint, #???
+        train_p=True, #???
     ):
         self.env = env
         self.learner = learner
         self.verifier = verifier
-        self.train_p = train_p
-        self.soft_constraint = soft_constraint
-        self.jitter_grid = jitter_grid
+        self.train_p = train_p #???
+        self.soft_constraint = soft_constraint #???
+        self.jitter_grid = jitter_grid #???
 
-        os.makedirs("saved", exist_ok=True)
-        os.makedirs("plots", exist_ok=True)
-        os.makedirs("loop", exist_ok=True)
-        self.lip_factor = lip_factor
+        self.lip_factor = lip_factor 
         self.plot = plot
-        self.prefill_delta = 0
-        self.iter = 0
-        self.info = {}
+        self.prefill_delta = 0 #???
+        self.iter = 0 # number of CEGIS iterations
+        self.info = {} 
 
     def train_until_zero_loss(self):
         # if len(self.verifier.train_buffer) == 0:
@@ -54,38 +53,32 @@ class RSMLoop:
                 n = 100
             else:
                 n = 20
-            train_ds, stepsize = self.verifier.get_domain_jitter_grid(n)
-            current_delta = stepsize
+            train_ds, stepsize = self.verifier.get_domain_jitter_grid(n)#???
+            current_delta = stepsize#???
         else:
-            train_ds = self.verifier.train_buffer.as_tfds(batch_size=4096)
-            current_delta = self.prefill_delta
+            train_ds = self.verifier.train_buffer.as_tfds(batch_size=4096)#???
+            current_delta = self.prefill_delta#???
         start_metrics = None
         num_epochs = 200 if self.iter == 0 else 200
 
         start_time = time.time()
         pbar = tqdm(total=num_epochs)
         for epoch in range(num_epochs):
-            # train_p = epoch % 5 == 0
-            # train_l = not train_p
-            train_p = self.iter >= 3
             # self.iter >= 10
             # if self.env.observation_space.shape[0] == 2
 
             # self.iter >= 10
             # if self.env.observation_space.shape[0] == 2
             # else self.iter >= 3
-            if not self.train_p:
-                train_p = False
-            # train_p = False
             train_l = True
             metrics = self.learner.train_epoch(
-                train_ds, current_delta, self.lip_factor, train_l, train_p
+                train_ds, current_delta, self.lip_factor, train_l
             )
             if start_metrics is None:
                 start_metrics = metrics
             pbar.update(1)
             pbar.set_description_str(
-                f"Train [l={train_l}, p={train_p}]: loss={metrics['loss']:0.3g}, dec_loss={metrics['dec_loss']:0.3g}, violations={metrics['train_violations']:0.3g}"
+                f"Train [l={train_l}]: loss={metrics['loss']:0.3g}, dec_loss={metrics['dec_loss']:0.3g}, violations={metrics['train_violations']:0.3g}"
             )
         pbar.n = num_epochs
         pbar.refresh()
@@ -103,10 +96,9 @@ class RSMLoop:
         )
 
     def run(self, timeout):
-
         start_time = time.time()
         last_saved = time.time()
-        self.prefill_delta = self.verifier.prefill_train_buffer()
+        self.prefill_delta = self.verifier.prefill_train_buffer()#???
         while True:
             runtime = time.time() - start_time
             if runtime > timeout:
@@ -119,27 +111,22 @@ class RSMLoop:
                 self.learner.save(f"saved/{self.env.name}_loop.jax")
                 print("[SAVED]")
             print(
-                f"\n#### Iteration {self.iter} ({runtime // 60:0.0f}:{runtime % 60:02.0f} elapsed) #####"
+                f"\n## Iteration {self.iter} ({runtime // 60:0.0f}:{runtime % 60:02.0f} elapsed) ##"
             )
             self.train_until_zero_loss()
+            
             K_f = self.env.lipschitz_constant
-            K_p = lipschitz_l1_jax(self.learner.p_state.params).item()
+            # K_p = lipschitz_l1_jax(self.learner.p_state.params).item()
             K_l = lipschitz_l1_jax(self.learner.l_state.params).item()
-            # n = 100 if self.env.reach_space.shape[0] == 2 else 20
-            # K_p = self.verifier.compute_lipschitz_bound_on_domain(
-            #     self.learner.p_ibp, self.learner.p_state.params, n
-            # ).item()
-            # K_l = self.verifier.compute_lipschitz_bound_on_domain(
-            #     self.learner.l_ibp, self.learner.l_state.params, n
-            # ).item()
-            lipschitz_k = K_l * K_f * (1 + K_p) + K_l
-            lipschitz_k = float(lipschitz_k)
+            
+            lipschitz_k = float(K_l * K_f) # to check
+    
             self.info["lipschitz_k"] = lipschitz_k
-            self.info["K_p"] = K_p
             self.info["K_f"] = K_f
             self.info["K_l"] = K_l
             self.info["iter"] = self.iter
             self.info["runtime"] = runtime
+
             sat, hard_violations, info = self.verifier.check_dec_cond(lipschitz_k)
             for k, v in info.items():
                 self.info[k] = v
@@ -358,73 +345,80 @@ class RSMLoop:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--env", default="lds0")
-    parser.add_argument("--timeout", default=60, type=int)  # in minutes
-    parser.add_argument("--eps", default=0.05, type=float)
-    parser.add_argument("--reach_prob", default=0.8, type=float)
-    parser.add_argument("--lip", default=0.01, type=float)
-    parser.add_argument("--p_lip", default=4.0, type=float)
-    parser.add_argument("--l_lip", default=4.0, type=float)
-    parser.add_argument("--hidden", default=128, type=int)
-    parser.add_argument("--num_layers", default=2, type=int)
+    parser = argparse.ArgumentParser(
+        prog='System Normalization for Neural Certificates',
+        description='Learning a reach-avoid supermartingale neural network with normalization techniques',
+        epilog='By Musan (Hao Wu) @ SKLCS, Institute of Software, UCAS'
+    )
+    # problem formulation    
+    parser.add_argument("--env", default="vandelpol", help='control system')
+    parser.add_argument("--timeout", default=60, type=int, help='max time limit in minutes') 
+    parser.add_argument("--reach_prob", default=0.8, type=float, help='reach-avoid probability')
+    
+    # neural network and training
+    parser.add_argument("--hidden", default=128, type=int, help='hidden neurons in each layer')
+    parser.add_argument("--num_layers", default=2, type=int, help='number of hidden layers')
+
+    # learner 
+    parser.add_argument("--continue_rsm", type=int, default=0, help='use an existing network')
+    
+    # verifier
+    parser.add_argument("--eps", default=0.05, type=float) # ???
+    parser.add_argument("--lip", default=0.01, type=float) # ???
+    # parser.add_argument("--p_lip", default=0.0, type=float) 
+    parser.add_argument("--l_lip", default=4.0, type=float) # ???
+
     parser.add_argument("--batch_size", default=512, type=int)
-    parser.add_argument("--ppo_iters", default=50, type=int)
-    parser.add_argument("--policy", default="policies/lds0_zero.jax")
-    parser.add_argument("--debug_k0", action="store_true")
-    parser.add_argument("--gen_plot", action="store_true")
-    parser.add_argument("--no_refinement", action="store_true")
-    parser.add_argument("--plot", action="store_true")
-    parser.add_argument("--skip_ppo", action="store_true")
-    parser.add_argument("--continue_ppo", action="store_true")
-    parser.add_argument("--only_ppo", action="store_true")
-    parser.add_argument("--small_mem", action="store_true")
-    parser.add_argument("--continue_rsm", type=int, default=0)
-    parser.add_argument("--train_p", type=int, default=1)
-    parser.add_argument("--square_l_output", type=int, default=1)
+    # parser.add_argument("--ppo_iters", default=50, type=int)
+    # parser.add_argument("--policy", default="policies/lds0_zero.jax")
+
+    # parser.add_argument("--train_p", type=int, default=1)
+    parser.add_argument("--square_l_output", default=True)
     parser.add_argument("--fail_check_fast", type=int, default=0)
     parser.add_argument("--jitter_grid", type=int, default=0)
     parser.add_argument("--soft_constraint", type=int, default=1)
     parser.add_argument("--gamma_decrease", default=1.0, type=float)
     parser.add_argument("--grid_factor", default=1.0, type=float)
+
+    parser.add_argument("--debug_k0", action="store_true")
+    parser.add_argument("--gen_plot", action="store_true")
+    parser.add_argument("--no_refinement", action="store_true")
+    parser.add_argument("--plot", action="store_true")
+    parser.add_argument("--small_mem", action="store_true")
+
     args = parser.parse_args()
-
-    if args.env.startswith("lds"):
-        env = LDSEnv()
-        env.name = args.env
-    elif args.env.startswith("pend"):
-        env = InvertedPendulum()
-        env.name = args.env
-    elif args.env.startswith("cavoid"):
-        env = CollisionAvoidanceEnv()
-        env.name = args.env
+    if args.env == 'vandelpol':
+        env = Vandelpol()
     else:
-        raise ValueError(f"Unknown environment '{args.env}'")
-
+        raise ValueError(f'Unknown environment "{args.env}"')
+    print(f'Control System: {args.env}')
+    
     os.makedirs("checkpoints", exist_ok=True)
-    learner = RSMLearner(
-        [args.hidden for i in range(args.num_layers)],
-        [128, 128],
-        env,
-        p_lip=args.p_lip,
+    os.makedirs("saved", exist_ok=True)
+    os.makedirs("plots", exist_ok=True)
+    os.makedirs("loop", exist_ok=True)
+    
+    learner = Learner(
+        env=env,
+        l_hidden=[args.hidden] * args.num_layers,
         l_lip=args.l_lip,
         eps=args.eps,
         gamma_decrease=args.gamma_decrease,
         reach_prob=args.reach_prob,
-        square_l_output=int(args.square_l_output),
-        # square_l_output=int(args.square_l_output),
+        square_l_output=args.square_l_output,
     )
-    if args.skip_ppo or args.continue_ppo:
-        learner.load(f"checkpoints/{args.env}_ppo.jax")
+    
+    # if args.skip_ppo or args.continue_ppo:
+    #     learner.load(f"checkpoints/{args.env}_ppo.jax")
 
-    if not args.skip_ppo:
-        learner.pretrain_policy(args.ppo_iters, lip_start=0.05 / 10, lip_end=0.05)
-        learner.save(f"checkpoints/{args.env}_ppo.jax")
-        print("[SAVED]")
+    # if not args.skip_ppo:
+    #     learner.pretrain_policy(args.ppo_iters, lip_start=0.05 / 10, lip_end=0.05)
+    #     learner.save(f"checkpoints/{args.env}_ppo.jax")
+    #     print("[SAVED]")
 
-    verifier = RSMVerifier(
-        learner,
-        env,
+    verifier = Verifier(
+        learner=learner,
+        env=env,
         batch_size=args.batch_size,
         reach_prob=args.reach_prob,
         fail_check_fast=bool(args.fail_check_fast),
@@ -434,24 +428,20 @@ if __name__ == "__main__":
 
     if args.continue_rsm > 0:
         learner.load(f"saved/{args.env}_loop.jax")
-        verifier.grid_size *= args.continue_rsm
+        verifier.grid_size *= args.continue_rsm #refine grid
 
-    loop = RSMLoop(
+    loop = RSMLoop( 
         learner,
         verifier,
         env,
         lip_factor=args.lip,
         plot=args.plot,
-        train_p=bool(args.train_p),
-        jitter_grid=bool(args.jitter_grid),
-        soft_constraint=bool(args.soft_constraint),
+        train_p=bool(args.train_p),#???
+        jitter_grid=bool(args.jitter_grid),#???
+        soft_constraint=bool(args.soft_constraint),#???
     )
 
-    # verifier.debug_cavoid()
-    # unsafe_min = verifier.compute_lower_bound_unsafe(200)
-    # print("unsafe min: ", unsafe_min)
-
-    txt_return = learner.evaluate_rl()
+    # txt_return = learner.evaluate_rl()
     loop.plot_l(f"plots/{args.env}_start.png")
     if args.only_ppo:
         with open("ppo_results.txt", "a") as f:

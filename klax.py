@@ -11,7 +11,7 @@ import flax
 import numpy as onp  # Ordinary NumPy
 import optax  # Optimizers
 from functools import partial
-from gym import spaces
+from gymnasium import spaces
 
 klax_config = {"eps": 1e-3}
 
@@ -51,8 +51,12 @@ def make_unsafe_spaces(obs_space, unsafe_bounds):
 
 @jax.jit
 def clip_grad_norm(grad, max_norm):
+    '''
+    Gradient clipping is a technique used to prevent the gradients from exploding during training. 
+    It limits the magnitude of the gradient updates, ensuring that the optimization process remains stable.
+    '''
     norm = jnp.linalg.norm(
-        jax.tree_util.tree_leaves(jax.tree_map(jnp.linalg.norm, grad))
+        jnp.asarray((jax.tree_util.tree_leaves(jax.tree_map(jnp.linalg.norm, grad))))
     )
     factor = jnp.minimum(max_norm, max_norm / (norm + 1e-6))
     return jax.tree_map((lambda x: x * factor), grad)
@@ -66,6 +70,9 @@ def contained_in_any(spaces, state):
 
 
 def triangular(rng_key, shape):
+    '''
+    sample from a triangular distribution over [-1,1]
+    '''
     U = jax.random.uniform(rng_key, shape=shape)
     p1 = -1 + jnp.sqrt(2 * U)
     p2 = 1 - jnp.sqrt((1 - U) * 2)
@@ -79,10 +86,14 @@ def softhuber(x):
 class MLP(nn.Module):
     features: Sequence[int]
     activation: str = "relu"
-    square_output: bool = False
-
+    softplus_output: bool = False
+    
     @nn.compact
     def __call__(self, x):
+        if len(self.features)==0:
+            # empty MLP with no parameters
+            print("here")
+            return x
         for feat in self.features[:-1]:
             x = nn.Dense(feat)(x)
             if self.activation == "relu":
@@ -90,15 +101,12 @@ class MLP(nn.Module):
             else:
                 x = nn.tanh(x)
         x = nn.Dense(self.features[-1])(x)
-        if self.square_output:
-            # x = jnp.square(x)
-            # x = jnp.abs(x)
+        if self.softplus_output:
             x = jax.nn.softplus(x)
-            # x = softhuber(x)
         return x
 
-
 # Must be called "Dense" because flax uses self.__class__.__name__ to name variables
+# Implements a dense layer customized for interval bound propagation (IBP)
 class Dense(nn.Module):
     features: int
 
@@ -107,7 +115,6 @@ class Dense(nn.Module):
         lower_bound_head, upper_bound_head = inputs
         kernel = self.param(
             "kernel",
-            # nn.initializers.zeros,  # RNG passed implicitly.
             jax.nn.initializers.glorot_uniform(),
             (lower_bound_head.shape[-1], self.features),
         )  # shape info.
@@ -132,7 +139,7 @@ class Dense(nn.Module):
 class IBPMLP(nn.Module):
     features: Sequence[int]
     activation: str = "relu"
-    square_output: bool = False
+    softplus_output: bool = False
 
     @nn.compact
     def __call__(self, x):
@@ -143,22 +150,18 @@ class IBPMLP(nn.Module):
             else:
                 x = [nn.tanh(x[0]), nn.tanh(x[1])]
         x = Dense(self.features[-1])(x)
-        if self.square_output:
+        if self.softplus_output:
             x = [jax.nn.softplus(x[0]), jax.nn.softplus(x[1])]
-            # sq_lb = jnp.abs(x[0])
-            # sq_ub = jnp.abs(x[1])
-            # sq_lb = softhuber(x[0])
-            # sq_ub = softhuber(x[1])
-            # sq_lb = jnp.square(x[0])
-            # sq_ub = jnp.square(x[1])
-            # new_lb = jnp.minimum(sq_lb, sq_ub)
-            # new_ub = jnp.maximum(sq_lb, sq_ub)
-            # intersect_zero = x[0] * x[1]
-            # new_lb = jnp.where(intersect_zero >= 0, new_lb, 0.0)
-            # x = [new_lb, new_ub]
-
         return x
 
+
+def create_train_state(model, rng, in_dim, learning_rate):
+    """
+    Creates initial TrainState.
+    """
+    params = model.init(rng, jnp.ones([1, in_dim]))
+    tx = optax.adam(learning_rate)
+    return train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
 
 def non_neg_loss(l):
     return jnp.mean(jnp.maximum(-l, 0))
@@ -198,13 +201,6 @@ def lipschitz_l1_jax(params):
         lipschitz_l1 *= jnp.max(jnp.sum(jnp.abs(v["kernel"]), axis=0))
 
     return lipschitz_l1
-
-
-def create_train_state(model, rng, in_dim, learning_rate):
-    """Creates initial `TrainState`."""
-    params = model.init(rng, jnp.ones([1, in_dim]))
-    tx = optax.adam(learning_rate)
-    return train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
 
 
 if __name__ == "__main__":

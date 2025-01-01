@@ -2,7 +2,7 @@ import os
 import time
 from functools import partial
 
-import gym.spaces
+import gymnasium.spaces
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 import jax
@@ -72,6 +72,9 @@ class TrainBuffer:
         #     self.s.pop(0)
 
     def extend(self, lst):
+        '''
+            add a list of elements
+        '''
         for s in lst:
             self.append(s)
 
@@ -95,18 +98,18 @@ class TrainBuffer:
         return train_ds
 
 
-class RSMVerifier:
+class Verifier:
     def __init__(
         self,
-        rsm_learner,
+        learner,
         env,
         batch_size,
         reach_prob,
-        fail_check_fast,
+        fail_check_fast, #???
         grid_factor,
         small_mem,
     ):
-        self.learner = rsm_learner
+        self.learner = learner
         self.env = env
         self.reach_prob = jnp.float32(reach_prob)
         self._small_mem = small_mem
@@ -162,9 +165,9 @@ class RSMVerifier:
         dims = self.env.reach_space.shape[0]
         target_points = [
             jnp.linspace(
-                self.env.reach_space.low[i],
-                self.env.reach_space.high[i],
-                n,
+                start=self.env.reach_space.low[i],
+                stop=self.env.reach_space.high[i],
+                num=n,
                 retstep=True,
                 endpoint=False,
             )
@@ -230,94 +233,74 @@ class RSMVerifier:
         return pmass, batched_grid_lb, batched_grid_ub
 
     def get_unfiltered_grid(self, n=100):
-        dims = self.env.reach_space.shape[0]
+        '''
+        Generate a grid of points in the observation space.
+        This method creates a grid of points in the observation space of the environment,
+        with `n` points in each dimension. It returns the centers, lower bounds, and upper
+        bounds of the grid cells.
+
+        Parameters:
+        n (int): Number of points in each dimension of the grid. Default is 100.
+        Returns:
+        tuple: A tuple containing three numpy arrays:
+            - grid_centers (numpy.ndarray): The centers of the grid cells.
+            - grid_lb (numpy.ndarray): The lower bounds of the grid cells.
+            - grid_ub (numpy.ndarray): The upper bounds of the grid cells.
+        '''
+        dims = self.env.observation_space.shape[0]
         grid, steps = [], []
         for i in range(dims):
-            samples, step = np.linspace(
-                self.env.reach_space.low[i],
-                self.env.reach_space.high[i],
+            samples, step = jnp.linspace(
+                self.env.observation_space.low[i],
+                self.env.observation_space.high[i],
                 n,
                 endpoint=False,
                 retstep=True,
             )
             grid.append(samples)
             steps.append(step)
-        grid = np.meshgrid(*grid)
+        
+        grid = jnp.meshgrid(*grid)
         grid_lb = [x.flatten() for x in grid]
         grid_ub = [grid_lb[i] + steps[i] for i in range(dims)]
         grid_centers = [grid_lb[i] + steps[i] / 2 for i in range(dims)]
 
-        grid_lb = np.stack(grid_lb, axis=1)
-        grid_ub = np.stack(grid_ub, axis=1)
-        grid_centers = np.stack(grid_centers, axis=1)
+        grid_lb = jnp.stack(grid_lb, axis=1)
+        grid_ub = jnp.stack(grid_ub, axis=1)
+        grid_centers = jnp.stack(grid_centers, axis=1)
         return grid_centers, grid_lb, grid_ub
 
-    # def get_filtered_grid(self, n=100):
-    #     if self._cached_state_grid is None or self._cached_state_grid[0] != n:
-    #         print(f"Allocating grid of n={n} ", end="", flush=True)
-    #         dims = self.env.reach_space.shape[0]
-    #         grid, steps = [], []
-    #         for i in range(dims):
-    #             samples, step = np.linspace(
-    #                 self.env.reach_space.low[i],
-    #                 self.env.reach_space.high[i],
-    #                 n,
-    #                 endpoint=False,
-    #                 retstep=True,
-    #             )
-    #             grid.append(samples)
-    #             steps.append(step)
-    #         print(f" meshgrid with steps={steps} ", end="", flush=True)
-    #         grid = np.meshgrid(*grid, copy=not self._small_mem)
-    #         grid = [grid[i].flatten() + steps[i] / 2 for i in range(dims)]
-    #         grid = np.stack(grid, axis=1)
-    #         contains = v_contains(self.env.safe_space, grid)
-    #         filtered_grid = grid[np.logical_not(contains)]
-    #         self._cached_state_grid = (n, filtered_grid)
-    #         print(" ... done", flush=True)
-    #     return self._cached_state_grid[1]
-
-    # def compute_upper_bound_safe(self, n):
-    #     dims = self.env.reach_space.shape[0]
-    #     grid, steps = [], []
-    #     for i in range(dims):
-    #         samples, step = np.linspace(
-    #             self.env.safe_space.low[i],
-    #             self.env.safe_space.high[i],
-    #             n,
-    #             endpoint=False,
-    #             retstep=True,
-    #         )
-    #         grid.append(samples)
-    #         steps.append(step)
-    #     grid_lb = np.meshgrid(*grid)
-    #     grid_lb = [x.flatten() for x in grid_lb]
-    #     grid_ub = [grid_lb[i] + steps[i] for i in range(dims)]
-    #     grid_lb = np.stack(grid_lb, axis=1)
-    #     grid_ub = np.stack(grid_ub, axis=1)
-    #     global_max = jnp.NINF
-    #     for i in tqdm(range(int(np.ceil(grid_ub.shape[0] / self.batch_size)))):
-    #         start = i * self.batch_size
-    #         end = np.minimum((i + 1) * self.batch_size, grid_ub.shape[0])
-    #         batch_lb = jnp.array(grid_lb[start:end])
-    #         batch_ub = jnp.array(grid_ub[start:end])
-    #         lb, ub = self.learner.l_ibp.apply(
-    #             self.learner.l_state.params, [batch_lb, batch_ub]
-    #         )
-    #         global_max = jnp.maximum(global_max, jnp.max(ub))
-    #     return float(global_max)
-
     def compute_bound_init(self, n):
+        """
+        Computes the bounds for cells that intersect with the initial spaces and are 
+        not fully contained within the target set.
+
+        Args:
+            n (int): The number of grid cells.
+
+        Returns:
+            tuple: The computed bounds for the filtered grid cells.
+
+        The method performs the following steps:
+        1. Retrieves the unfiltered grid cells' lower and upper bounds.
+        2. Creates a mask to include grid cells that intersect with any of the initial spaces.
+        3. Updates the mask to exclude grid cells that are fully contained within the target set.
+        4. Filters the grid cells based on the mask.
+        5. Asserts that there are grid cells remaining after filtering.
+        6. Computes and returns the bounds for the filtered grid cells.
+        """
         _, grid_lb, grid_ub = self.get_unfiltered_grid(n)
 
-        mask = np.zeros(grid_lb.shape[0], dtype=np.bool)
-        # Include if the grid cell intersects with any of the init spaces
+        # Creates a mask to include grid cells that intersect with any of the initial spaces.
+        mask = np.zeros(grid_lb.shape[0], dtype=jnp.bool)
+
         for init_space in self.env.init_spaces:
             intersect = v_intersect(init_space, grid_lb, grid_ub)
             mask = np.logical_or(
                 mask,
                 intersect,
             )
+            
         # Exclude if both lb AND ub are in the target set
         contains_lb = v_contains(self.env.safe_space, grid_lb)
         contains_ub = v_contains(self.env.safe_space, grid_ub)
@@ -464,7 +447,8 @@ class RSMVerifier:
         return l
 
     def check_dec_cond(self, lipschitz_k):
-        dims = self.env.reach_space.shape[0]
+        # dims = self.env.reach_space.shape[0]
+        dims = self.env.observation_space.shape[0]
         grid_total_size = self.grid_size ** dims
 
         loop_start_time = time.perf_counter()

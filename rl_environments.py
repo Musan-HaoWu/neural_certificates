@@ -1,11 +1,16 @@
-import gym
-from gym import spaces
+# import gym
+# from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
+
+import jax
+import jax.numpy as jnp
 import numpy as np
+
 from os import path
 from scipy.stats import triang
-import jax.numpy as jnp
 from functools import partial
-import jax
+
 import matplotlib.pyplot as plt
 import os
 from klax import triangular, make_unsafe_spaces, contained_in_any
@@ -14,8 +19,112 @@ from klax import triangular, make_unsafe_spaces, contained_in_any
 def angle_normalize(x):
     return ((x + np.pi) % (2 * np.pi)) - np.pi
 
+class Vandelpol(gym.Env):
+    def __init__(self):
+        self.steps = None
+        self.state = None
+        self.has_render = False
+        self.name = f"vandelpol"
+        # domain + init + target + unsafe + action
 
-# (1 - |x|)/(1
+        self.observation_space = spaces.Box(
+            low = np.array([-1.0, -1.0], dtype=jnp.float32),  
+            high = np.array([1.0, 1.0], dtype=jnp.float32),
+            dtype=jnp.float32)
+        self.init_space = spaces.Box(
+            low=np.array([-0.2, 0.2]),
+            high=np.array([0.2, 0.6]),
+            dtype=jnp.float32,
+        )
+        self.target_space = spaces.Box(
+            low = np.array([-0.1, -0.1], jnp.float32), 
+            high = np.array([0.1, 0.1], jnp.float32), 
+            dtype = jnp.float32
+        )
+        self.unsafe_space = spaces.Box(
+            low = np.array([-1.2, -0.2], dtype=jnp.float32), 
+            high = np.array([-0.8, 0.2], dtype=jnp.float32), 
+            dtype=jnp.float32,
+        )
+
+        self.action_space = None
+        
+        self._max_steps = 200
+        self._jax_rng = jax.random.PRNGKey(2025)
+        self.v_next = jax.vmap(self.next)
+        self.reset()
+
+    def reset(self, state = None):
+        if state is None:
+            state = self.init_space.sample()
+        self.state = state
+        self.steps = 0
+        return self.state
+
+    def next(self, state, rng):
+        noise = jax.random.uniform(rng,dtype=jnp.float32,minval=0,maxval=1)
+        x = state[0]
+        y = state[1]
+        next_x = x - 0.2 * y
+        next_y = y + 0.1 * (x + 0.5 * y * (x*x-1-noise))
+        next_state = jnp.array([next_x, next_y])
+        return next_state 
+
+    def step(self):
+        self.steps += 1
+        # should stop
+        # next_x_clip = np.clip(
+        #     next_x, self.observation_space.low[0], self.observation_space.high[0]
+        # )
+        # next_y_clip = np.clip(
+        #     next_y, self.observation_space.low[1], self.observation_space.high[1]
+        # )
+        # next_state = np.array([next_x, next_y])
+        # next_state_clip = np.array([next_x_clip, next_y_clip])
+        # done = not np.array_equal(next_state_clip, next_state)
+        self._jax_rng, rng = jax.random.split(self._jax_rng)
+        noise = jax.random.uniform(rng,dtype=jnp.float32,minval=0,maxval=1)
+        
+        x = self.state[0]
+        y = self.state[1]
+        next_x = x - 0.2 * y
+        next_y = y + 0.1 * (x + 0.5 * y * (x*x-1-noise))
+        next_state = jnp.array([next_x, next_y])
+        
+        reward = 0
+
+        self.state = next_state
+        done = (self.steps >= self._max_steps) or done 
+        
+        return self.state, reward, done, {}
+
+    @property
+    def lipschitz_constant(self):
+        if self._difficulty == 0:
+            A = np.max(np.sum(np.array([[1, 0.2, 0.0], [0, 1, 0.3]]), axis=0))
+        elif self._difficulty == 1:
+            A = np.max(np.sum(np.array([[1, 0.045, 0.45], [0, 0.9, 0.5]]), axis=0))
+        else:
+            A = np.max(np.sum(np.array([[0, 0.9, 0.5], [0, 1, 0.2]]), axis=0))
+        return A
+    
+    #???
+    @property
+    def noise_bounds(self):
+        return -self.noise, self.noise
+
+    # ???
+    def integrate_noise(self, a: list, b: list):
+        dims = 2
+        pmass = np.ones(a[0].shape[0])
+        for i in range(dims):
+            loc = self.noise_bounds[0][i]
+            scale = self.noise_bounds[1][i] - self.noise_bounds[0][i]
+            marginal_pmass = triang.cdf(b[i], c=0.5, loc=loc, scale=scale) - triang.cdf(
+                a[i], c=0.5, loc=loc, scale=scale
+            )
+            pmass *= marginal_pmass
+        return pmass
 
 
 class LDSEnv(gym.Env):
@@ -26,51 +135,49 @@ class LDSEnv(gym.Env):
         self._difficulty = difficulty
         self.name = f"lds"
 
-        safe = np.array([0.2, 0.2], np.float32)
-        self.safe_space = spaces.Box(low=-safe, high=safe, dtype=np.float32)
+        safe = np.array([0.2, 0.2], jnp.float32)
+        self.safe_space = spaces.Box(low=-safe, high=safe, dtype=jnp.float32)
 
         # init and  safe should be non-overlapping
-        # init = np.array([0.4, 0.4], np.float32)
+        # init = np.array([0.4, 0.4], jnp.float32)
         # self.init_spaces = make_unsafe_spaces(
-        #     spaces.Box(low=-init, high=init, dtype=np.float32), safe
+        #     spaces.Box(low=-init, high=init, dtype=jnp.float32), safe
         # )
         self.init_spaces = [
             spaces.Box(
                 low=np.array([-0.25, -0.1]),
                 high=np.array([-0.2, 0.1]),
-                dtype=np.float32,
+                dtype=jnp.float32,
             ),
             spaces.Box(
                 low=np.array([0.25, -0.1]),
                 high=np.array([0.2, 0.1]),
-                dtype=np.float32,
+                dtype=jnp.float32,
             ),
         ]
 
-        self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
+        self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=jnp.float32)
         self.observation_space = spaces.Box(
-            # low=-0.8 * np.ones(2, dtype=np.float32),
-            # high=0.8 * np.ones(2, dtype=np.float32),
-            low=-1.5 * np.ones(2, dtype=np.float32),
-            high=1.5 * np.ones(2, dtype=np.float32),
-            dtype=np.float32,
+            low=-1.5 * np.ones(2, dtype=jnp.float32),
+            high=1.5 * np.ones(2, dtype=jnp.float32),
+            dtype=jnp.float32,
         )
         self.noise = np.array([0.01, 0.005])
         # self.noise = np.array([0.0005, 0.0002])
 
         # self.unsafe_spaces = make_unsafe_spaces(
-        #     self.observation_space, np.array([0.9, 0.9], np.float32)
+        #     self.observation_space, np.array([0.9, 0.9], jnp.float32)
         # )[0:2]
         self.unsafe_spaces = [
             spaces.Box(
                 low=self.observation_space.low,
                 high=np.array([self.observation_space.low[0] + 0.1, 0.0]),
-                dtype=np.float32,
+                dtype=jnp.float32,
             ),
             spaces.Box(
                 low=np.array([self.observation_space.high[0] - 0.1, 0.0]),
                 high=self.observation_space.high,
-                dtype=np.float32,
+                dtype=jnp.float32,
             ),
         ]
 
@@ -129,7 +236,7 @@ class LDSEnv(gym.Env):
 
         reward = 0
         # unsafe_box = spaces.Box(
-        #     low=-self.unsafe_bounds, high=self.unsafe_bounds, dtype=np.float32
+        #     low=-self.unsafe_bounds, high=self.unsafe_bounds, dtype=jnp.float32
         # )
         # if not unsafe_box.contains(next_state):
         #     reward = -1
@@ -181,38 +288,38 @@ class InvertedPendulum(gym.Env):
         self.steps = 0
         self.viewer = None
 
-        init = np.array([0.3, 0.3], np.float32)
-        self.init_spaces = [spaces.Box(low=-init, high=init, dtype=np.float32)]
-        init = np.array([-1, 1], np.float32)
-        self.init_spaces_train = [spaces.Box(low=-init, high=init, dtype=np.float32)]
+        init = np.array([0.3, 0.3], jnp.float32)
+        self.init_spaces = [spaces.Box(low=-init, high=init, dtype=jnp.float32)]
+        init = np.array([-1, 1], jnp.float32)
+        self.init_spaces_train = [spaces.Box(low=-init, high=init, dtype=jnp.float32)]
 
-        high = np.array([3, 3], dtype=np.float32)
-        self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
-        self.observation_space = spaces.Box(low=-high, high=high, dtype=np.float32)
+        high = np.array([3, 3], dtype=jnp.float32)
+        self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=jnp.float32)
+        self.observation_space = spaces.Box(low=-high, high=high, dtype=jnp.float32)
         self.noise = np.array([0.02, 0.01])
 
-        safe = np.array([0.2, 0.2], np.float32)
-        self.safe_space = spaces.Box(low=-safe, high=safe, dtype=np.float32)
-        safe = np.array([0.1, 0.1], np.float32)
-        self.safe_space_train = spaces.Box(low=-safe, high=safe, dtype=np.float32)
+        safe = np.array([0.2, 0.2], jnp.float32)
+        self.safe_space = spaces.Box(low=-safe, high=safe, dtype=jnp.float32)
+        safe = np.array([0.1, 0.1], jnp.float32)
+        self.safe_space_train = spaces.Box(low=-safe, high=safe, dtype=jnp.float32)
 
-        # reach_space = np.array([1.5, 1.5], np.float32)  # make it fail
-        reach_space = np.array([0.7, 0.7], np.float32)
-        # reach_space = np.array([0.5, 0.5], np.float32)  # same as in AAAI
+        # reach_space = np.array([1.5, 1.5], jnp.float32)  # make it fail
+        reach_space = np.array([0.7, 0.7], jnp.float32)
+        # reach_space = np.array([0.5, 0.5], jnp.float32)  # same as in AAAI
         self.reach_space = spaces.Box(
-            low=-reach_space, high=reach_space, dtype=np.float32
+            low=-reach_space, high=reach_space, dtype=jnp.float32
         )
 
         self.unsafe_spaces = [
             spaces.Box(
                 low=self.reach_space.low,
                 high=np.array([self.reach_space.low[0] + 0.1, 0.0]),
-                dtype=np.float32,
+                dtype=jnp.float32,
             ),
             spaces.Box(
                 low=np.array([self.reach_space.high[0] - 0.1, 0.0]),
                 high=self.reach_space.high,
-                dtype=np.float32,
+                dtype=jnp.float32,
             ),
         ]
 
@@ -304,45 +411,45 @@ class CollisionAvoidanceEnv(gym.Env):
         self.state = None
         self.has_render = False
 
-        # init = np.array([1.0, 1.0], np.float32)
-        # self.init_space = spaces.Box(low=-init, high=init, dtype=np.float32)
+        # init = np.array([1.0, 1.0], jnp.float32)
+        # self.init_space = spaces.Box(low=-init, high=init, dtype=jnp.float32)
 
-        self.action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=np.float32)
+        self.action_space = spaces.Box(low=-1, high=1, shape=(2,), dtype=jnp.float32)
         self.observation_space = spaces.Box(
-            low=-np.ones(2, dtype=np.float32),
-            high=np.ones(2, dtype=np.float32),
-            dtype=np.float32,
+            low=-np.ones(2, dtype=jnp.float32),
+            high=np.ones(2, dtype=jnp.float32),
+            dtype=jnp.float32,
         )
         # was 0.05 before
         self.noise = np.array([0.05, 0.05])  # was 0.02 before
-        safe = np.array([0.2, 0.2], np.float32)  # was 0.1 before
-        self.safe_space = spaces.Box(low=-safe, high=safe, dtype=np.float32)
+        safe = np.array([0.2, 0.2], jnp.float32)  # was 0.1 before
+        self.safe_space = spaces.Box(low=-safe, high=safe, dtype=jnp.float32)
 
         self.init_spaces_train = make_unsafe_spaces(
-            self.observation_space, np.array([0.9, 0.9], np.float32)
+            self.observation_space, np.array([0.9, 0.9], jnp.float32)
         )
         self.init_spaces = [
             spaces.Box(
                 low=np.array([-1, -0.6]),
                 high=np.array([-0.9, 0.6]),
-                dtype=np.float32,
+                dtype=jnp.float32,
             ),
             spaces.Box(
                 low=np.array([0.9, -0.6]),
                 high=np.array([1.0, 0.6]),
-                dtype=np.float32,
+                dtype=jnp.float32,
             ),
         ]
 
         self.unsafe_spaces = []
         self.unsafe_spaces.append(
             spaces.Box(
-                low=np.array([-0.3, 0.7]), high=np.array([0.3, 1.0]), dtype=np.float32
+                low=np.array([-0.3, 0.7]), high=np.array([0.3, 1.0]), dtype=jnp.float32
             )
         )
         self.unsafe_spaces.append(
             spaces.Box(
-                low=np.array([-0.3, -1.0]), high=np.array([0.3, -0.7]), dtype=np.float32
+                low=np.array([-0.3, -1.0]), high=np.array([0.3, -0.7]), dtype=jnp.float32
             )
         )
         self.reach_space = self.observation_space
@@ -393,7 +500,7 @@ class CollisionAvoidanceEnv(gym.Env):
 
         reward = 0
         # unsafe_box = spaces.Box(
-        #     low=-self.unsafe_bounds, high=self.unsafe_bounds, dtype=np.float32
+        #     low=-self.unsafe_bounds, high=self.unsafe_bounds, dtype=jnp.float32
         # )
         # if not unsafe_box.contains(next_state):
         #     reward = -1
