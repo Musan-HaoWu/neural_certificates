@@ -119,11 +119,11 @@ class Verifier:
 
         self.batch_size = batch_size
         self.refinement_enabled = True
-        if env.reach_space.shape[0] == 2:
+        if env.observation_space.shape[0] == 2:
             self.grid_size = int(grid_factor * 500)
             self.pmass_n = 12
             self.grid_stream_size = 1024 * 1024
-        elif env.reach_space.shape[0] == 3:
+        elif env.observation_space.shape[0] == 3:
             self.grid_size = int(grid_factor * 200)
             self.pmass_n = 10
             self.grid_stream_size = 2 * 1024 * 1024
@@ -147,26 +147,24 @@ class Verifier:
         )
 
     def prefill_train_buffer(self):
-        print("Creating pre-train buffer ... ", end="")
-        if self.env.reach_space.shape[0] == 2:
-            n = 400
-        elif self.env.reach_space.shape[0] == 3:
+        if self.env.observation_space.shape[0] == 2:
+            n = 100
+        elif self.env.observation_space.shape[0] == 3:
             n = 100
         else:
             n = 20
-            # n = 5
         state_grid, _, _ = self.get_unfiltered_grid(n=n)
         self.train_buffer.append(np.array(state_grid))
         print(" [done]")
-        return (self.env.reach_space.high[0] - self.env.reach_space.low[0]) / n
+        return (self.env.observation_space.high[0] - self.env.observation_space.low[0]) / n
 
     @partial(jax.jit, static_argnums=(0, 2))
     def get_grid_item(self, idx, n):
-        dims = self.env.reach_space.shape[0]
+        dims = self.env.observation_space.shape[0]
         target_points = [
             jnp.linspace(
-                start=self.env.reach_space.low[i],
-                stop=self.env.reach_space.high[i],
+                start=self.env.observation_space.low[i],
+                stop=self.env.observation_space.high[i],
                 num=n,
                 retstep=True,
                 endpoint=False,
@@ -184,7 +182,7 @@ class Verifier:
         return jnp.array([target_points[i][inds[i]] for i in range(dims)])
 
     def get_refined_grid_template(self, delta, n):
-        dims = self.env.reach_space.shape[0]
+        dims = self.env.observation_space.shape[0]
         grid, new_deltas = [], []
         for i in range(dims):
             samples, new_delta = jnp.linspace(
@@ -220,9 +218,9 @@ class Verifier:
         grid_lb = [x.flatten() for x in grid_lb]
         grid_ub = [grid_lb[i] + steps[i] for i in range(dims)]
 
-        if dims < self.env.reach_space.shape[0]:
+        if dims < self.env.observation_space.shape[0]:
             # Fill remaining dimensions with 0
-            remaining = self.env.reach_space.shape[0] - len(self.env.noise_bounds)
+            remaining = self.env.observation_space.shape[0] - len(self.env.noise_bounds)
             for i in range(remaining):
                 grid_lb.append(jnp.zeros_like(grid_lb[0]))
                 grid_ub.append(jnp.zeros_like(grid_lb[0]))
@@ -302,8 +300,8 @@ class Verifier:
             )
             
         # Exclude if both lb AND ub are in the target set
-        contains_lb = v_contains(self.env.safe_space, grid_lb)
-        contains_ub = v_contains(self.env.safe_space, grid_ub)
+        contains_lb = v_contains(self.env.target_spaces, grid_lb)
+        contains_ub = v_contains(self.env.target_spaces, grid_ub)
         mask = np.logical_and(
             mask, np.logical_not(np.logical_and(contains_lb, contains_ub))
         )
@@ -334,8 +332,8 @@ class Verifier:
         _, grid_lb, grid_ub = self.get_unfiltered_grid(n)
 
         # Exclude if both lb AND ub are in the target set
-        contains_lb = v_contains(self.env.safe_space, grid_lb)
-        contains_ub = v_contains(self.env.safe_space, grid_ub)
+        contains_lb = v_contains(self.env.target_spaces, grid_lb)
+        contains_ub = v_contains(self.env.target_spaces, grid_ub)
         mask = np.logical_not(np.logical_and(contains_lb, contains_ub))
 
         grid_lb = grid_lb[mask]
@@ -347,8 +345,8 @@ class Verifier:
         _, grid_lb, grid_ub = self.get_unfiltered_grid(n)
 
         # Exclude if both lb AND ub are in the target set
-        contains_lb = v_contains(self.env.safe_space, grid_lb)
-        contains_ub = v_contains(self.env.safe_space, grid_ub)
+        contains_lb = v_contains(self.env.target_spaces, grid_lb)
+        contains_ub = v_contains(self.env.target_spaces, grid_ub)
         mask = np.logical_not(np.logical_and(contains_lb, contains_ub))
 
         grid_lb = grid_lb[mask]
@@ -358,14 +356,11 @@ class Verifier:
 
     def get_domain_jitter_grid(self, n):
         grid_center, grid_lb, grid_ub = self.get_unfiltered_grid(n)
-
         stepsize = grid_ub[0, 0] - grid_lb[0, 0]
-        # Exclude if both lb AND ub are in the target set
-        contains = v_contains(self.env.safe_space, grid_center)
+        contains = v_contains(self.env.target_spaces[0], grid_center)
         mask = np.logical_not(contains)
-
         grid_center = grid_center[mask]
-        assert grid_center.shape[0] > 0
+        # assert grid_center.shape[0] > 0
         return grid_center, stepsize
 
     def compute_lipschitz_bound_on_domain(self, ibp_fn, params, n):
@@ -378,6 +373,16 @@ class Verifier:
         return lip2
 
     def compute_bounds_on_set(self, grid_lb, grid_ub):
+        """
+        Computes the global minimum and maximum bounds over a set of input intervals.
+
+        Args:
+            grid_lb (array-like): Lower bounds of the input intervals.
+            grid_ub (array-like): Upper bounds of the input intervals.
+
+        Returns:
+            tuple: A tuple containing the global minimum and maximum bounds as floats.
+        """
         global_min = jnp.inf
         global_max = jnp.NINF
         for i in tqdm(range(int(np.ceil(grid_ub.shape[0] / self.batch_size)))):
@@ -393,11 +398,11 @@ class Verifier:
         return float(global_min), float(global_max)
 
     @partial(jax.jit, static_argnums=(0,))
-    def compute_expected_l(self, params, s, a, pmass, batched_grid_lb, batched_grid_ub):
-        deterministic_s_next = self.env.v_next(s, a)
+    def compute_expected_l(self, params, s, pmass, batched_grid_lb, batched_grid_ub):
+        deterministic_s_next = self.env.v_next(s)
         batch_size = s.shape[0]
         ibp_size = batched_grid_lb.shape[0]
-        obs_dim = self.env.reach_space.shape[0]
+        obs_dim = self.env.observation_space.shape[0]
         # s has (batch_size,2)
 
         # Broadcasting happens here, that's why we don't do directly vmap (although it's probably possible somehow)
@@ -420,12 +425,11 @@ class Verifier:
 
     @partial(jax.jit, static_argnums=(0,))
     def _check_dec_batch(self, l_params, p_params, f_batch, l_batch, K):
-        a_batch = self.learner.p_state.apply_fn(p_params, f_batch)
+        # a_batch = self.learner.p_state.apply_fn(p_params, f_batch)
         pmass, batched_grid_lb, batched_grid_ub = self._cached_pmass_grid
         e = self.compute_expected_l(
             l_params,
             f_batch,
-            a_batch,
             pmass,
             batched_grid_lb,
             batched_grid_ub,
@@ -447,17 +451,18 @@ class Verifier:
         return l
 
     def check_dec_cond(self, lipschitz_k):
-        # dims = self.env.reach_space.shape[0]
+        
         dims = self.env.observation_space.shape[0]
         grid_total_size = self.grid_size ** dims
 
         loop_start_time = time.perf_counter()
         if self.env.observation_space.shape[0] == 2:
-            n = 200
+            n = 100
         elif self.env.observation_space.shape[0] == 3:
             n = 100
         else:
             n = 50
+
         _, ub_init = self.compute_bound_init(n)
         domain_min, _ = self.compute_bound_domain(n)
         # ub_init = 10
@@ -465,9 +470,10 @@ class Verifier:
 
         # state_grid = self.get_filtered_grid(n=self.grid_size)
         info_dict = {}
-        delta = (self.env.reach_space.high[0] - self.env.reach_space.low[0]) / (
+        delta = (self.env.observation_space.high[0] - self.observation_space.low[0]) / (
             self.grid_size - 1
         )
+
         K = lipschitz_k * delta
         info_dict["delta"] = delta
         info_dict["K"] = K
@@ -476,6 +482,7 @@ class Verifier:
         print(f"K={K} (with delta)")
         print(f"Checking GRID of size {self.grid_size}")
         # print(f"Checking GRID of size {state_grid.shape[0]}")
+
         self.get_pmass_grid()  # cache pmass grid
         K = jnp.float32(K)
 
@@ -497,16 +504,18 @@ class Verifier:
         total_kernel_time = 0
         total_kernel_iters = 0
         pbar = tqdm(total=grid_total_size // grid_stream_size)
+        
         for i in range(0, grid_total_size, grid_stream_size):
             idx = jnp.arange(i, i + grid_stream_size)
             sub_grid = jnp.array(self.v_get_grid_item(idx, self.grid_size))
-            contains = jv_contains(self.env.safe_space, sub_grid)
+            contains = jv_contains(self.env.target_spaces, sub_grid)
             sub_grid = sub_grid[jnp.logical_not(contains)]
 
             kernel_start = time.perf_counter()
             for start in range(0, sub_grid.shape[0], self.batch_size):
                 end = min(start + self.batch_size, sub_grid.shape[0])
                 f_batch = jnp.array(sub_grid[start:end])
+
                 # TODO: later optimize this by filtering the entire stream first
                 l_batch = self.learner.l_state.apply_fn(
                     self.learner.l_state.params, f_batch
@@ -558,41 +567,8 @@ class Verifier:
         print(f"violations={violations}")
         print(f"hard_violations={hard_violations}")
 
-        # if len(violation_buffer) > 0:
-        #     self._debug_violations = np.concatenate(
-        #         [np.array(g) for g in violation_buffer]
-        #     )
         self.train_buffer.extend(hard_violation_buffer)
-        # self.train_buffer.extend(violation_buffer)
 
-        # for i in tqdm(range(int(np.ceil(state_grid.shape[0] / self.batch_size)))):
-        #     start = i * self.batch_size
-        #     end = np.minimum((i + 1) * self.batch_size, state_grid.shape[0])
-        # grid_hard_violating_indices.append(hard_violating_indices)
-        # grid_violating_indices.append(np.array(violating_indices))
-        # if v > 0:
-        #     refinement_buffer.append(f_batch[violating_indices])
-
-        # refinement_buffer.append(np.array(f_batch[violating_indices]))
-        # if len(self.train_buffer) < 2 * 10 ** 6:
-        #     f_batch = f_batch[violating_indices]
-        #     a_batch = a_batch[violating_indices]
-        #     self.add_counterexamples(f_batch, a_batch)
-        # if hard_v > 0 and len(self.train_buffer) < 2 * 10 ** 6:
-        #     # avg_decrease.append(jnp.mean(decrease[hard_violating_indices]))
-        #     f_batch = f_batch[hard_violating_indices]
-        #     # a_batch = a_batch[hard_violating_indices]
-        #     self.train_buffer.append(f_batch)
-        # if hard_v > 0:
-        #     hard_violation_buffer.append(f_batch)
-        # det_s_next = self.env.v_next(f_batch, a_batch)
-        # l_det = self.learner.l_state.apply_fn(
-        #     self.learner.l_state.params, det_s_next
-        # )
-        # breakpoint()
-        # expected_l_next.append(e)
-        # self._perf_stats["loop"] += time.perf_counter() - _perf_loop_start
-        # expected_l_next = jnp.concatenate(expected_l_next).flatten()
         loop_time = time.perf_counter() - loop_start_time
         if self.refinement_enabled and hard_violations == 0 and violations > 0:
             print(f"Zero hard violations -> refinement of {violations} soft violations")
@@ -615,16 +591,6 @@ class Verifier:
                 return True, 0, info_dict
             else:
                 print("Refinement unsuccessful")
-
-        # if hard_violations > 0:
-        #     grid_hard_violating_indices = [
-        #         np.array(g) for g in grid_hard_violating_indices
-        #     ]
-        #     grid_hard_violating_indices = np.concatenate(grid_hard_violating_indices)
-        #     self.hard_constraint_violation_buffer = state_grid[
-        #         grid_hard_violating_indices
-        #     ]
-
         # breakpoint()
         info_dict["avg_increase"] = (
             np.mean(avg_decrease) if len(avg_decrease) > 0 else 0
@@ -655,12 +621,11 @@ class Verifier:
         l_batch = self.learner.l_state.apply_fn(
             self.learner.l_state.params, f_batch
         ).flatten()
-        a_batch = self.learner.p_state.apply_fn(self.learner.p_state.params, f_batch)
+        # a_batch = self.learner.p_state.apply_fn(self.learner.p_state.params, f_batch)
         pmass, batched_grid_lb, batched_grid_ub = self.get_pmass_grid()
         e = self.compute_expected_l(
             self.learner.l_state.params,
             f_batch,
-            a_batch,
             pmass,
             batched_grid_lb,
             batched_grid_ub,
@@ -683,7 +648,7 @@ class Verifier:
         # refinement_buffer = [np.array(r) for r in refinement_buffer]
         # refinement_buffer = np.concatenate(refinement_buffer, axis=0)
         pmass, batched_grid_lb, batched_grid_ub = self.get_pmass_grid()
-        n_dims = self.env.reach_space.shape[0]
+        n_dims = self.env.observation_space.shape[0]
         batch_size = 10 if self.env.observation_space.shape[0] == 2 else 5
         # if self._small_mem:
         #     batch_size = batch_size // 2
@@ -702,7 +667,7 @@ class Verifier:
             s_batch = jnp.array(refinement_buffer[start:end])
             s_batch = s_batch.reshape((-1, 1, n_dims))
             r_batch = s_batch + template_batch
-            r_batch = r_batch.reshape((-1, self.env.reach_space.shape[0]))  # flatten
+            r_batch = r_batch.reshape((-1, self.env.observation_space.shape[0]))  # flatten
 
             l_batch = self.learner.l_state.apply_fn(
                 self.learner.l_state.params, r_batch

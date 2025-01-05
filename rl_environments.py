@@ -28,26 +28,32 @@ class Vandelpol(gym.Env):
         # domain + init + target + unsafe + action
 
         self.observation_space = spaces.Box(
-            low = np.array([-1.0, -1.0], dtype=jnp.float32),  
-            high = np.array([1.0, 1.0], dtype=jnp.float32),
+            low = np.array([-2.0, -2.0], dtype=jnp.float32),  
+            high = np.array([2.0, 2.0], dtype=jnp.float32),
             dtype=jnp.float32)
-        self.init_space = spaces.Box(
+        self.action_space = None
+
+        self.init_spaces = [
+            spaces.Box(
             low=np.array([-0.2, 0.2]),
             high=np.array([0.2, 0.6]),
             dtype=jnp.float32,
         )
-        self.target_space = spaces.Box(
+        ]
+        self.target_spaces = [
+            spaces.Box(
             low = np.array([-0.1, -0.1], jnp.float32), 
             high = np.array([0.1, 0.1], jnp.float32), 
             dtype = jnp.float32
         )
-        self.unsafe_space = spaces.Box(
+        ]
+        self.unsafe_spaces = [
+            spaces.Box(
             low = np.array([-1.2, -0.2], dtype=jnp.float32), 
             high = np.array([-0.8, 0.2], dtype=jnp.float32), 
             dtype=jnp.float32,
         )
-
-        self.action_space = None
+        ]
         
         self._max_steps = 200
         self._jax_rng = jax.random.PRNGKey(2025)
@@ -56,7 +62,9 @@ class Vandelpol(gym.Env):
 
     def reset(self, state = None):
         if state is None:
-            state = self.init_space.sample()
+            self._jax_rng, rng = jax.random.split(self._jax_rng)
+            index = jax.random.randint(rng, shape=(), minval=0, maxval=len(self.init_spaces))
+            state = self.init_spaces[index].sample()
         self.state = state
         self.steps = 0
         return self.state
@@ -75,7 +83,7 @@ class Vandelpol(gym.Env):
         # should stop
         # next_x_clip = np.clip(
         #     next_x, self.observation_space.low[0], self.observation_space.high[0]
-        # )
+        # )  
         # next_y_clip = np.clip(
         #     next_y, self.observation_space.low[1], self.observation_space.high[1]
         # )
@@ -109,12 +117,22 @@ class Vandelpol(gym.Env):
         return A
     
     #???
-    @property
-    def noise_bounds(self):
-        return -self.noise, self.noise
+    # @property
+    # def noise_bounds(self):
+    #     return -self.noise, self.noise
 
     # ???
     def integrate_noise(self, a: list, b: list):
+        """
+        Integrates noise over specified bounds using a triangular distribution.
+
+        Parameters:
+        a (list): Lower bounds for integration.
+        b (list): Upper bounds for integration.
+
+        Returns:
+        numpy.ndarray: Probability mass after integrating noise over the specified bounds.
+        """
         dims = 2
         pmass = np.ones(a[0].shape[0])
         for i in range(dims):

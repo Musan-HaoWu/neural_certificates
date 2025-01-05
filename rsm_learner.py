@@ -27,7 +27,7 @@ class Learner:
         l_hidden,
         l_lip,
         eps, # epsilon in the expected decrease condition
-        gamma_decrease,
+        gamma_decrease, #???
         reach_prob,
         softplus_l_output=True,
     ) -> None:
@@ -37,20 +37,19 @@ class Learner:
         self.reach_prob = jnp.float32(reach_prob) 
         
         obs_dim = self.env.observation_space.shape[0]
-        action_dim = self.env.action_space.shape[0] # set to 0
 
         l_net = MLP(l_hidden + [1], activation="relu", softplus_output=softplus_l_output)
+        
         # l_ibp: interval back propagation, used in verification
         self.l_ibp = IBPMLP(
             l_hidden + [1], activation="relu", softplus_output=softplus_l_output
         )
         
-        self.l_state = create_train_state(
-            l_net, jax.random.PRNGKey(1), obs_dim, 0.0005)
-        
+        self.l_state = create_train_state(l_net, jax.random.PRNGKey(1), obs_dim, 0.0005)
         self.l_lip = jnp.float32(l_lip)
+
         self.rng = jax.random.PRNGKey(777)
-        
+
         self._debug_init = []
         self._debug_unsafe = []
 
@@ -88,12 +87,19 @@ class Learner:
 
     @partial(jax.jit, static_argnums=(0, 2))
     def sample_target(self, rng, n):
-        return jax.random.uniform(
-            rng,
-            (n, self.env.observation_space.shape[0]),
-            minval=self.env.safe_space.low,
-            maxval=self.env.safe_space.high,
-        )
+        rngs = jax.random.split(rng, len(self.env.target_spaces))
+        per_space_n = n // len(self.env.target_spaces)
+
+        batch = []
+        for i in range(len(self.env.target_spaces)):
+            x = jax.random.uniform(
+                rngs[i],
+                (per_space_n, self.env.observation_space.shape[0]),
+                minval=self.env.target_spaces[i].low,
+                maxval=self.env.target_spaces[i].high,
+            )
+            batch.append(x)
+        return jnp.concatenate(batch, axis=0)
     
     @partial(jax.jit, static_argnums=(0,))
     def train_step(self, l_state, state, lip, rng, current_delta):
@@ -112,13 +118,12 @@ class Learner:
         s_random = jax.random.uniform(rngs[4], state.shape, minval=-0.5, maxval=0.5)
         state = state + current_delta * s_random
 
-
         # TODO: initialize train states
 
         def loss_fn(l_params):
             l = l_state.apply_fn(l_params, state)
 
-            # loss decrease
+            # L_decrease
             s_next = jnp.expand_dims(self.env.v_next(state), axis=1)
             
             # noise = triangular(
@@ -129,8 +134,6 @@ class Learner:
 
             s_next_fn = jax.vmap(l_state.apply_fn, in_axes=(None, 0))
             l_next = s_next_fn(l_params, s_next)
-
-            # L_decrease
             exp_l_next = jnp.mean(l_next, axis=1)
 
             # breakpoint()
@@ -237,25 +240,26 @@ class Learner:
         try:
             params = jax_load(
                 {
-                    "policy": self.p_state,
-                    "value": self.v_state,
+                    # "policy": self.p_state,
+                    # "value": self.v_state,
                     "martingale": self.l_state,
                 },
                 filename,
             )
-            self.p_state = params["policy"]
-            self.l_state = params["martingale"]
+            # self.p_state = params["policy"]
+            # self.l_state = params["martingale"]
             self.v_state = params["value"]
         except KeyError as e:
-            if force_load_all:
-                raise e
-            # Legacy load
-            try:
-                params = {"policy": self.p_state, "value": self.v_state}
-                params = jax_load(params, filename)
-                self.p_state = params["policy"]
-                self.v_state = params["value"]
-            except KeyError:
-                params = {"policy": self.p_state}
-                params = jax_load(params, filename)
-                self.p_state = params["policy"]
+            print("Error loading model")
+            # if force_load_all:
+            #     raise e
+            # # Legacy load
+            # try:
+            #     params = {"policy": self.p_state, "value": self.v_state}
+            #     params = jax_load(params, filename)
+            #     self.p_state = params["policy"]
+            #     self.v_state = params["value"]
+            # except KeyError:
+            #     params = {"policy": self.p_state}
+            #     params = jax_load(params, filename)
+            #     self.p_state = params["policy"]
