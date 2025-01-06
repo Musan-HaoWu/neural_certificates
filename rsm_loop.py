@@ -45,42 +45,36 @@ class RSMLoop:
         self.iter = 0 # number of CEGIS iterations
         self.info = {} 
 
-    def train_until_zero_loss(self):
-        # if len(self.verifier.train_buffer) == 0:
-        #     return
+    def train(self):
         if self.jitter_grid:
             if self.env.observation_space.shape[0] == 2:
-                n = 300
+                n = 200
             elif self.env.observation_space.shape[0] == 3:
                 n = 100
             else:
-                n = 20
+                n = 50
+            print("create grid.")
             train_ds, stepsize = self.verifier.get_domain_jitter_grid(n)#???
             current_delta = stepsize
         else:
+            print("use train buffer.")
             train_ds = self.verifier.train_buffer.as_tfds(batch_size=4096)#???
             current_delta = self.prefill_delta
+        
         start_metrics = None
-        num_epochs = 200 if self.iter == 0 else 200
+        num_epochs = 100 
 
         start_time = time.time()
         pbar = tqdm(total=num_epochs)
         for epoch in range(num_epochs):
-            # self.iter >= 10
-            # if self.env.observation_space.shape[0] == 2
-
-            # self.iter >= 10
-            # if self.env.observation_space.shape[0] == 2
-            # else self.iter >= 3
-            train_l = True
             metrics = self.learner.train_epoch(
-                train_ds, current_delta, self.lip_factor, train_l
+                train_ds, current_delta, self.lip_factor
             )
             if start_metrics is None:
                 start_metrics = metrics
             pbar.update(1)
             pbar.set_description_str(
-                f"Train [l={train_l}]: loss={metrics['loss']:0.3g}, dec_loss={metrics['dec_loss']:0.3g}, violations={metrics['train_violations']:0.3g}"
+                f"Train: loss={metrics['loss']:0.3g}, dec_loss={metrics['dec_loss']:0.3g}, violations={metrics['train_violations']:0.3g}"
             )
         pbar.n = num_epochs
         pbar.refresh()
@@ -115,11 +109,11 @@ class RSMLoop:
                 print("[SAVED]")
             
             print(f"\n## Iteration {self.iter} ({runtime // 60:0.0f}:{runtime % 60:02.0f} elapsed) ##")
-            self.train_until_zero_loss()
             
+            self.train()
+        
             K_f = self.env.lipschitz_constant
             K_l = lipschitz_l1_jax(self.learner.l_state.params).item()
-            
             lipschitz_k = float(K_l * K_f) # to check
     
             self.info["lipschitz_k"] = lipschitz_k
@@ -133,6 +127,9 @@ class RSMLoop:
                 self.info[k] = v
             print("info=", str(self.info), flush=True)
             
+            # if the expected decrease condition is satisfied
+            # then check other conditions
+            # o.w. refine the grid
             if sat:
                 print("Expected decrease condition fulfilled!")
                 self.learner.save(f"saved/{self.env.name}_loop.jax")
@@ -175,6 +172,7 @@ class RSMLoop:
                 )
                 if ( self.soft_constraint or actual_reach_prob >= self.verifier.reach_prob):
                     return True
+            
             if hard_violations == 0 and self.iter > 4 and self.iter % 2 == 0: #???
                 print("Refining grid")
                 if self.env.observation_space.shape[0] == 2:
@@ -198,8 +196,9 @@ class RSMLoop:
         trace = [np.array(state)]
         for i in range(100):
             rng, seed = jax.random.split(rng)
-            state = self.env.next(state, rng)
+            state = self.env.next(state, rng, N=1)
             trace.append(np.array(state))
+        # print(trace)
         return np.stack(trace, axis=0)
 
     def plot_l(self, filename):

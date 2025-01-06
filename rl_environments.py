@@ -69,27 +69,27 @@ class Vandelpol(gym.Env):
         self.steps = 0
         return self.state
 
-    def next(self, state, rng):
-        noise = jax.random.uniform(rng,dtype=jnp.float32,minval=0,maxval=1)
+    def next(self, state, rng, N=16):
+        '''
+            predict the next step, do NOT change the current state
+            N: number of samples
+
+            Return:
+            an N-array of next states
+            if N==1, just return the next state 
+        '''
+        noise = jax.random.uniform(rng, shape=(N,), dtype=jnp.float32,minval=0,maxval=1)
         x = state[0]
         y = state[1]
-        next_x = x - 0.2 * y
+        next_x = jnp.full_like(noise, x - 0.2 * y)
         next_y = y + 0.1 * (x + 0.5 * y * (x*x-1-noise))
-        next_state = jnp.array([next_x, next_y])
-        return next_state 
+        if N==1:
+            return jnp.array([next_x[0],next_y[0]])
+        else:    
+            return jnp.stack((next_x, next_y), axis=-1) 
 
     def step(self):
         self.steps += 1
-        # should stop
-        # next_x_clip = np.clip(
-        #     next_x, self.observation_space.low[0], self.observation_space.high[0]
-        # )  
-        # next_y_clip = np.clip(
-        #     next_y, self.observation_space.low[1], self.observation_space.high[1]
-        # )
-        # next_state = np.array([next_x, next_y])
-        # next_state_clip = np.array([next_x_clip, next_y_clip])
-        # done = not np.array_equal(next_state_clip, next_state)
         self._jax_rng, rng = jax.random.split(self._jax_rng)
         noise = jax.random.uniform(rng,dtype=jnp.float32,minval=0,maxval=1)
         
@@ -108,13 +108,7 @@ class Vandelpol(gym.Env):
 
     @property
     def lipschitz_constant(self):
-        if self._difficulty == 0:
-            A = np.max(np.sum(np.array([[1, 0.2, 0.0], [0, 1, 0.3]]), axis=0))
-        elif self._difficulty == 1:
-            A = np.max(np.sum(np.array([[1, 0.045, 0.45], [0, 0.9, 0.5]]), axis=0))
-        else:
-            A = np.max(np.sum(np.array([[0, 0.9, 0.5], [0, 1, 0.2]]), axis=0))
-        return A
+        return 4.0
     
     #???
     # @property

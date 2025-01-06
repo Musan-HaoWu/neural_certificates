@@ -17,43 +17,73 @@ for gpu in gpus:
     tf.config.experimental.set_memory_growth(gpu, True)
 
 
-def v_contains(box, states):
-    b_low = np.expand_dims(box.low, axis=0)
-    b_high = np.expand_dims(box.high, axis=0)
-    contains = np.logical_and(
-        np.all(states >= b_low, axis=1), np.all(states <= b_high, axis=1)
-    )
+def v_contains(boxs, states):
+    '''
+    Check if a vector of states is contained in any of the boxes
+    Return:
+        contains: a boolean vector of length states.shape[0]
+    '''
+    contains = jnp.zeros(states.shape[0], dtype=jnp.bool)
+    for box in boxs:
+        b_low = jnp.expand_dims(box.low, axis=0)
+        b_high = jnp.expand_dims(box.high, axis=0)
+        mask = jnp.logical_and(
+            jnp.all(states >= b_low, axis=1), jnp.all(states <= b_high, axis=1)
+        )
+        contains = jnp.logical_or(mask, contains)
     return contains
 
-
-def v_intersect(box, lb, ub):
-    b_low = np.expand_dims(box.low, axis=0)
-    b_high = np.expand_dims(box.high, axis=0)
-    contain_lb = np.logical_and(lb >= b_low, lb <= b_high)
-    contain_ub = np.logical_and(ub >= b_low, ub <= b_high)
-    contains_any = np.all(np.logical_or(contain_lb, contain_ub), axis=1)
-
-    return contains_any
-
-
-def jv_intersect(box, lb, ub):
-    b_low = jnp.expand_dims(box.low, axis=0)
-    b_high = jnp.expand_dims(box.high, axis=0)
-    contain_lb = jnp.logical_and(lb >= b_low, lb <= b_high)
-    contain_ub = jnp.logical_and(ub >= b_low, ub <= b_high)
-    # every axis much either lb or ub contain
-    contains_any = jnp.all(jnp.logical_or(contain_lb, contain_ub), axis=1)
-
-    return contains_any
-
-
-def jv_contains(box, states):
-    b_low = jnp.expand_dims(box.low, axis=0)
-    b_high = jnp.expand_dims(box.high, axis=0)
-    contains = np.logical_and(
-        jnp.all(states >= b_low, axis=1), jnp.all(states <= b_high, axis=1)
-    )
+def v_intersect(boxs, lb, ub):
+    '''
+    Check if a vector of boxs (described by lb and ub) intersect with any of the boxes
+    Return:
+        contains: a boolean vector of length states.shape[0]
+    '''
+    contains = jnp.zeros(lb.shape[0], dtype=jnp.bool)
+    for box in boxs:
+        b_low = jnp.expand_dims(box.low, axis=0)
+        b_high = jnp.expand_dims(box.high, axis=0)
+        contain_lb = jnp.logical_and(lb >= b_low, lb <= b_high)
+        contain_ub = jnp.logical_and(ub >= b_low, ub <= b_high)
+        mask = jnp.all(jnp.logical_or(contain_lb, contain_ub), axis=1)
+        contains = jnp.logical_or(mask, contains)
     return contains
+
+# def v_contains(box, states):
+#     b_low = np.expand_dims(box.low, axis=0)
+#     b_high = np.expand_dims(box.high, axis=0)
+#     contains = np.logical_and(
+#         np.all(states >= b_low, axis=1), np.all(states <= b_high, axis=1)
+#     )
+#     return contains
+
+# def v_intersect(box, lb, ub):
+#     b_low = np.expand_dims(box.low, axis=0)
+#     b_high = np.expand_dims(box.high, axis=0)
+#     contain_lb = np.logical_and(lb >= b_low, lb <= b_high)
+#     contain_ub = np.logical_and(ub >= b_low, ub <= b_high)
+#     contains_any = np.all(np.logical_or(contain_lb, contain_ub), axis=1)
+
+#     return contains_any
+
+# def jv_intersect(box, lb, ub):
+#     b_low = jnp.expand_dims(box.low, axis=0)
+#     b_high = jnp.expand_dims(box.high, axis=0)
+#     contain_lb = jnp.logical_and(lb >= b_low, lb <= b_high)
+#     contain_ub = jnp.logical_and(ub >= b_low, ub <= b_high)
+#     # every axis much either lb or ub contain
+#     contains_any = jnp.all(jnp.logical_or(contain_lb, contain_ub), axis=1)
+
+#     return contains_any
+
+
+# def jv_contains(box, states):
+#     b_low = jnp.expand_dims(box.low, axis=0)
+#     b_high = jnp.expand_dims(box.high, axis=0)
+#     contains = np.logical_and(
+#         jnp.all(states >= b_low, axis=1), jnp.all(states <= b_high, axis=1)
+#     )
+#     return contains
 
 
 class TrainBuffer:
@@ -147,15 +177,19 @@ class Verifier:
         )
 
     def prefill_train_buffer(self):
+        '''
+            create a grid,
+            add all center points into the train buffer
+            return delta
+        '''
         if self.env.observation_space.shape[0] == 2:
-            n = 100
+            n = 200
         elif self.env.observation_space.shape[0] == 3:
             n = 100
         else:
-            n = 20
+            n = 50
         state_grid, _, _ = self.get_unfiltered_grid(n=n)
         self.train_buffer.append(np.array(state_grid))
-        print(" [done]")
         return (self.env.observation_space.high[0] - self.env.observation_space.low[0]) / n
 
     @partial(jax.jit, static_argnums=(0, 2))
@@ -232,18 +266,9 @@ class Verifier:
 
     def get_unfiltered_grid(self, n=100):
         '''
-        Generate a grid of points in the observation space.
-        This method creates a grid of points in the observation space of the environment,
-        with `n` points in each dimension. It returns the centers, lower bounds, and upper
-        bounds of the grid cells.
-
-        Parameters:
-        n (int): Number of points in each dimension of the grid. Default is 100.
-        Returns:
-        tuple: A tuple containing three numpy arrays:
-            - grid_centers (numpy.ndarray): The centers of the grid cells.
-            - grid_lb (numpy.ndarray): The lower bounds of the grid cells.
-            - grid_ub (numpy.ndarray): The upper bounds of the grid cells.
+        Generate a grid of points in the observation space of the environment,
+        with `n` points in each dimension. 
+        It returns the centers, lower bounds, and upper bounds of the grid cells.
         '''
         dims = self.env.observation_space.shape[0]
         grid, steps = [], []
@@ -269,36 +294,9 @@ class Verifier:
         return grid_centers, grid_lb, grid_ub
 
     def compute_bound_init(self, n):
-        """
-        Computes the bounds for cells that intersect with the initial spaces and are 
-        not fully contained within the target set.
-
-        Args:
-            n (int): The number of grid cells.
-
-        Returns:
-            tuple: The computed bounds for the filtered grid cells.
-
-        The method performs the following steps:
-        1. Retrieves the unfiltered grid cells' lower and upper bounds.
-        2. Creates a mask to include grid cells that intersect with any of the initial spaces.
-        3. Updates the mask to exclude grid cells that are fully contained within the target set.
-        4. Filters the grid cells based on the mask.
-        5. Asserts that there are grid cells remaining after filtering.
-        6. Computes and returns the bounds for the filtered grid cells.
-        """
         _, grid_lb, grid_ub = self.get_unfiltered_grid(n)
-
-        # Creates a mask to include grid cells that intersect with any of the initial spaces.
-        mask = np.zeros(grid_lb.shape[0], dtype=jnp.bool)
-
-        for init_space in self.env.init_spaces:
-            intersect = v_intersect(init_space, grid_lb, grid_ub)
-            mask = np.logical_or(
-                mask,
-                intersect,
-            )
-            
+        mask = v_intersect(self.env.init_spaces, grid_lb, grid_ub)
+        
         # Exclude if both lb AND ub are in the target set
         contains_lb = v_contains(self.env.target_spaces, grid_lb)
         contains_ub = v_contains(self.env.target_spaces, grid_ub)
@@ -314,15 +312,9 @@ class Verifier:
 
     def compute_bound_unsafe(self, n):
         _, grid_lb, grid_ub = self.get_unfiltered_grid(n)
+        mask = v_intersect(self.env.unsafe_spaces, grid_lb, grid_ub)
 
-        # Include only if either lb OR ub are in one of the unsafe sets
-        mask = np.zeros(grid_lb.shape[0], dtype=np.bool)
-        for unsafe_space in self.env.unsafe_spaces:
-            intersect = v_intersect(unsafe_space, grid_lb, grid_ub)
-            mask = np.logical_or(
-                mask,
-                intersect,
-            )
+        # unsafe and target spaces are disjoint
         grid_lb = grid_lb[mask]
         grid_ub = grid_ub[mask]
         assert grid_ub.shape[0] > 0
@@ -355,6 +347,9 @@ class Verifier:
         return grid_lb, grid_ub
 
     def get_domain_jitter_grid(self, n):
+        '''
+        Generate a grid, exclude those cells that are contained in the target set
+        '''
         grid_center, grid_lb, grid_ub = self.get_unfiltered_grid(n)
         stepsize = grid_ub[0, 0] - grid_lb[0, 0]
         contains = v_contains(self.env.target_spaces[0], grid_center)
@@ -384,7 +379,7 @@ class Verifier:
             tuple: A tuple containing the global minimum and maximum bounds as floats.
         """
         global_min = jnp.inf
-        global_max = jnp.NINF
+        global_max = -jnp.inf #jnp.NINF
         for i in tqdm(range(int(np.ceil(grid_ub.shape[0] / self.batch_size)))):
             start = i * self.batch_size
             end = np.minimum((i + 1) * self.batch_size, grid_ub.shape[0])
@@ -457,7 +452,7 @@ class Verifier:
 
         loop_start_time = time.perf_counter()
         if self.env.observation_space.shape[0] == 2:
-            n = 100
+            n = 200
         elif self.env.observation_space.shape[0] == 3:
             n = 100
         else:
@@ -465,12 +460,10 @@ class Verifier:
 
         _, ub_init = self.compute_bound_init(n)
         domain_min, _ = self.compute_bound_domain(n)
-        # ub_init = 10
-        # domain_min = 0
 
         # state_grid = self.get_filtered_grid(n=self.grid_size)
         info_dict = {}
-        delta = (self.env.observation_space.high[0] - self.observation_space.low[0]) / (
+        delta = (self.env.observation_space.high[0] - self.env.observation_space.low[0]) / (
             self.grid_size - 1
         )
 
@@ -508,7 +501,7 @@ class Verifier:
         for i in range(0, grid_total_size, grid_stream_size):
             idx = jnp.arange(i, i + grid_stream_size)
             sub_grid = jnp.array(self.v_get_grid_item(idx, self.grid_size))
-            contains = jv_contains(self.env.target_spaces, sub_grid)
+            contains = v_contains(self.env.target_spaces, sub_grid)
             sub_grid = sub_grid[jnp.logical_not(contains)]
 
             kernel_start = time.perf_counter()
@@ -591,7 +584,6 @@ class Verifier:
                 return True, 0, info_dict
             else:
                 print("Refinement unsuccessful")
-        # breakpoint()
         info_dict["avg_increase"] = (
             np.mean(avg_decrease) if len(avg_decrease) > 0 else 0
         )
@@ -600,47 +592,39 @@ class Verifier:
         print(f"{violations}/{grid_total_size} violated decrease condition")
         print(f"{hard_violations}/{grid_total_size} hard violations")
         print(f"Train buffer len: {len(self.train_buffer)}")
-        # print(f"### Decrease performance profile ### ")
-        # print(
-        #     f"apply= {100.0*self._perf_stats['apply']/self._perf_stats['loop']:0.3f}%"
-        # )
         if loop_time > 60:
             print(f"Grid runtime={loop_time/60:0.0f} min")
         else:
             print(f"Grid runtime={loop_time:0.2f} s")
-        # if self._perf_stats["loop"] > 60:
-        #     print(f"Total grid runtime={self._perf_stats['loop']/60:0.0f} min")
-        # else:
-        #     print(f"Total grid runtime={self._perf_stats['loop']:0.2f} s")
-        # breakpoint()
+
         return violations == 0, hard_violations, info_dict
 
-    def debug_cavoid(self):
-        K = 0.01
-        f_batch = jnp.array([(1.0, -1), (1.0, -0.99), (0.99, -1.0), (0.99, -0.99)])
-        l_batch = self.learner.l_state.apply_fn(
-            self.learner.l_state.params, f_batch
-        ).flatten()
-        # a_batch = self.learner.p_state.apply_fn(self.learner.p_state.params, f_batch)
-        pmass, batched_grid_lb, batched_grid_ub = self.get_pmass_grid()
-        e = self.compute_expected_l(
-            self.learner.l_state.params,
-            f_batch,
-            pmass,
-            batched_grid_lb,
-            batched_grid_ub,
-        )
-        decrease = e + K - l_batch
-        violating_indices = decrease >= 0
-        v = violating_indices.astype(jnp.int32).sum()
-        hard_violating_indices = e - l_batch >= 0
-        hard_v = hard_violating_indices.astype(jnp.int32).sum()
-        print("f_batch=", str(f_batch))
-        print("l_batch=", str(l_batch))
-        print("e=", str(e))
-        print("violating_indices=", str(violating_indices))
-        # breakpoint()
-        return v, violating_indices, hard_v, hard_violating_indices
+    # def debug_cavoid(self):
+    #     K = 0.01
+    #     f_batch = jnp.array([(1.0, -1), (1.0, -0.99), (0.99, -1.0), (0.99, -0.99)])
+    #     l_batch = self.learner.l_state.apply_fn(
+    #         self.learner.l_state.params, f_batch
+    #     ).flatten()
+    #     # a_batch = self.learner.p_state.apply_fn(self.learner.p_state.params, f_batch)
+    #     pmass, batched_grid_lb, batched_grid_ub = self.get_pmass_grid()
+    #     e = self.compute_expected_l(
+    #         self.learner.l_state.params,
+    #         f_batch,
+    #         pmass,
+    #         batched_grid_lb,
+    #         batched_grid_ub,
+    #     )
+    #     decrease = e + K - l_batch
+    #     violating_indices = decrease >= 0
+    #     v = violating_indices.astype(jnp.int32).sum()
+    #     hard_violating_indices = e - l_batch >= 0
+    #     hard_v = hard_violating_indices.astype(jnp.int32).sum()
+    #     print("f_batch=", str(f_batch))
+    #     print("l_batch=", str(l_batch))
+    #     print("e=", str(e))
+    #     print("violating_indices=", str(violating_indices))
+    #     # breakpoint()
+    #     return v, violating_indices, hard_v, hard_violating_indices
 
     def refine_grid(
         self, refinement_buffer, lipschitz_k, current_delta, ub_init, domain_min
