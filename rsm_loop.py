@@ -34,7 +34,6 @@ class RSMLoop:
         self.learner = learner
         self.verifier = verifier
 
-        # self.train_p = train_p #???
         self.soft_constraint = soft_constraint #???
         self.jitter_grid = jitter_grid #???
 
@@ -188,15 +187,20 @@ class RSMLoop:
             self.iter += 1
 
     def rollout(self):
+        '''
+        generate a trace of the system
+        '''
         rng = np.random.default_rng().integers(0, 10000)
         rng = jax.random.PRNGKey(rng)
+        rngs = jax.random.split(rng, 200)
+
         index = jax.random.randint(rng, shape=(), minval=0, maxval=len(self.env.init_spaces))
         state = self.env.init_spaces[index].sample()
     
         trace = [np.array(state)]
-        for i in range(100):
-            rng, seed = jax.random.split(rng)
-            state = self.env.next(state, rng, N=1)
+        for i in range(200):
+            state = self.env.next(state)
+            state = self.env.add_noise(state,rngs[i])
             trace.append(np.array(state))
         # print(trace)
         return np.stack(trace, axis=0)
@@ -416,7 +420,6 @@ if __name__ == "__main__":
         env,
         lip_factor=args.lip,
         plot=args.plot,
-        # train_p=bool(args.train_p),#???
         jitter_grid=bool(args.jitter_grid),#???
         soft_constraint=bool(args.soft_constraint),#???
     )

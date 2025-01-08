@@ -49,43 +49,6 @@ def v_intersect(boxs, lb, ub):
         contains = jnp.logical_or(mask, contains)
     return contains
 
-# def v_contains(box, states):
-#     b_low = np.expand_dims(box.low, axis=0)
-#     b_high = np.expand_dims(box.high, axis=0)
-#     contains = np.logical_and(
-#         np.all(states >= b_low, axis=1), np.all(states <= b_high, axis=1)
-#     )
-#     return contains
-
-# def v_intersect(box, lb, ub):
-#     b_low = np.expand_dims(box.low, axis=0)
-#     b_high = np.expand_dims(box.high, axis=0)
-#     contain_lb = np.logical_and(lb >= b_low, lb <= b_high)
-#     contain_ub = np.logical_and(ub >= b_low, ub <= b_high)
-#     contains_any = np.all(np.logical_or(contain_lb, contain_ub), axis=1)
-
-#     return contains_any
-
-# def jv_intersect(box, lb, ub):
-#     b_low = jnp.expand_dims(box.low, axis=0)
-#     b_high = jnp.expand_dims(box.high, axis=0)
-#     contain_lb = jnp.logical_and(lb >= b_low, lb <= b_high)
-#     contain_ub = jnp.logical_and(ub >= b_low, ub <= b_high)
-#     # every axis much either lb or ub contain
-#     contains_any = jnp.all(jnp.logical_or(contain_lb, contain_ub), axis=1)
-
-#     return contains_any
-
-
-# def jv_contains(box, states):
-#     b_low = jnp.expand_dims(box.low, axis=0)
-#     b_high = jnp.expand_dims(box.high, axis=0)
-#     contains = np.logical_and(
-#         jnp.all(states >= b_low, axis=1), jnp.all(states <= b_high, axis=1)
-#     )
-#     return contains
-
-
 class TrainBuffer:
     def __init__(self, max_size=3_000_000):
         self.s = []
@@ -136,32 +99,38 @@ class Verifier:
         batch_size,
         reach_prob,
         fail_check_fast, #???
-        grid_factor,
-        small_mem,
+        grid_factor, # decide grid size
+        small_mem, # can be removed
     ):
         self.learner = learner
         self.env = env
         self.reach_prob = jnp.float32(reach_prob)
-        self._small_mem = small_mem
+        self._small_mem = small_mem # can be removed
         self.fail_check_fast = fail_check_fast
         # self.batch_size = batch_size
         # self.grid_stream_size = grid_stream_size
 
         self.batch_size = batch_size
         self.refinement_enabled = True
-        if env.observation_space.shape[0] == 2:
-            self.grid_size = int(grid_factor * 500)
-            self.pmass_n = 12
-            self.grid_stream_size = 1024 * 1024
-        elif env.observation_space.shape[0] == 3:
-            self.grid_size = int(grid_factor * 200)
-            self.pmass_n = 10
-            self.grid_stream_size = 2 * 1024 * 1024
-        else:
-            self.refinement_enabled = False
-            self.grid_size = int(grid_factor * 100)
-            self.pmass_n = 10
-            self.grid_stream_size = 8 * 1024 * 1024
+        
+        self.grid_size = int(grid_factor * 500)
+        self.pmass_n = 10
+        self.grid_stream_size = 1024 * 1024
+        
+        # if env.observation_space.shape[0] == 2:
+        #     self.grid_size = int(grid_factor * 500)
+        #     self.pmass_n = 10
+        #     self.grid_stream_size = 1024 * 1024
+        # elif env.observation_space.shape[0] == 3:
+        #     self.grid_size = int(grid_factor * 200)
+        #     self.pmass_n = 10
+        #     self.grid_stream_size = 2 * 1024 * 1024
+        # else:
+        #     self.refinement_enabled = False
+        #     self.grid_size = int(grid_factor * 100)
+        #     self.pmass_n = 10
+        #     self.grid_stream_size = 8 * 1024 * 1024
+        
         self._cached_pmass_grid = None
         self._cached_state_grid = None
         self._cached_state_grid = None
@@ -194,6 +163,14 @@ class Verifier:
 
     @partial(jax.jit, static_argnums=(0, 2))
     def get_grid_item(self, idx, n):
+        '''
+        Generates a grid item based on the given index and grid size.
+        Parameters:
+        idx (int): The index of the grid item to retrieve.
+        n (int): The number of divisions in each dimension of the grid.
+        Returns:
+        jnp.array: The coordinates of the grid item corresponding to the given index.
+        '''
         dims = self.env.observation_space.shape[0]
         target_points = [
             jnp.linspace(
@@ -234,8 +211,12 @@ class Verifier:
         return grid, new_deltas[0]
 
     def get_pmass_grid(self):
+        '''
+        grid the noise space, and compute the probability mass of each cell
+        '''
         if self._cached_pmass_grid is not None:
             return self._cached_pmass_grid
+        
         dims = len(self.env.noise_bounds[0])
         grid, steps = [], []
         for i in range(dims):
@@ -258,8 +239,10 @@ class Verifier:
             for i in range(remaining):
                 grid_lb.append(jnp.zeros_like(grid_lb[0]))
                 grid_ub.append(jnp.zeros_like(grid_lb[0]))
-        batched_grid_lb = jnp.stack(grid_lb, axis=1)  # stack on input  dim
-        batched_grid_ub = jnp.stack(grid_ub, axis=1)  # stack on input dim
+        
+        batched_grid_lb = jnp.stack(grid_lb, axis=1)
+        batched_grid_ub = jnp.stack(grid_ub, axis=1)
+        
         pmass = self.env.integrate_noise(grid_lb, grid_ub)
         self._cached_pmass_grid = (pmass, batched_grid_lb, batched_grid_ub)
         return pmass, batched_grid_lb, batched_grid_ub
@@ -394,9 +377,13 @@ class Verifier:
 
     @partial(jax.jit, static_argnums=(0,))
     def compute_expected_l(self, params, s, pmass, batched_grid_lb, batched_grid_ub):
+        '''
+        TODO: normalize 
+        '''
         deterministic_s_next = self.env.v_next(s)
         batch_size = s.shape[0]
         ibp_size = batched_grid_lb.shape[0]
+        
         obs_dim = self.env.observation_space.shape[0]
         # s has (batch_size,2)
 
@@ -419,21 +406,25 @@ class Verifier:
         return expected_value
 
     @partial(jax.jit, static_argnums=(0,))
-    def _check_dec_batch(self, l_params, p_params, f_batch, l_batch, K):
-        # a_batch = self.learner.p_state.apply_fn(p_params, f_batch)
+    def _check_dec_batch(self, l_params, grid_batch, l_batch, K):
+        
+        # if self.normalziation = True
+
         pmass, batched_grid_lb, batched_grid_ub = self._cached_pmass_grid
         e = self.compute_expected_l(
             l_params,
-            f_batch,
+            grid_batch,
             pmass,
             batched_grid_lb,
             batched_grid_ub,
         )
-        decrease = e + K - l_batch
-        violating_indices = decrease >= 0
+
+        violating_indices = (e >= l_batch - K)
         v = violating_indices.astype(jnp.int32).sum()
-        hard_violating_indices = e - l_batch >= 0
+
+        hard_violating_indices = (e >= l_batch)
         hard_v = hard_violating_indices.astype(jnp.int32).sum()
+        
         return v, violating_indices, hard_v, hard_violating_indices
 
     @partial(jax.jit, static_argnums=(0,))
@@ -446,26 +437,25 @@ class Verifier:
         return l
 
     def check_dec_cond(self, lipschitz_k):
-        
+        loop_start_time = time.perf_counter()
+
         dims = self.env.observation_space.shape[0]
         grid_total_size = self.grid_size ** dims
+        
+        info_dict = {}
+        delta = (self.env.observation_space.high[0] - self.env.observation_space.low[0]) / (
+            self.grid_size - 1
+        )
 
-        loop_start_time = time.perf_counter()
+        # estimate the ub_init and domain_min, used for normalization
         if self.env.observation_space.shape[0] == 2:
             n = 200
         elif self.env.observation_space.shape[0] == 3:
             n = 100
         else:
             n = 50
-
         _, ub_init = self.compute_bound_init(n)
         domain_min, _ = self.compute_bound_domain(n)
-
-        # state_grid = self.get_filtered_grid(n=self.grid_size)
-        info_dict = {}
-        delta = (self.env.observation_space.high[0] - self.env.observation_space.low[0]) / (
-            self.grid_size - 1
-        )
 
         K = lipschitz_k * delta
         info_dict["delta"] = delta
@@ -474,16 +464,16 @@ class Verifier:
         print(f"delta={delta}")
         print(f"K={K} (with delta)")
         print(f"Checking GRID of size {self.grid_size}")
-        # print(f"Checking GRID of size {state_grid.shape[0]}")
 
         self.get_pmass_grid()  # cache pmass grid
+
         K = jnp.float32(K)
 
         violations = 0
         hard_violations = 0
         expected_l_next = []
         avg_decrease = []
-        refinement_buffer = []
+        refinement_buffer = [] # grid needs to be refined
         violation_buffer = []
         hard_violation_buffer = []
         # self.hard_constraint_violation_buffer = None
@@ -496,9 +486,11 @@ class Verifier:
         grid_stream_size = min(grid_total_size, self.grid_stream_size)
         total_kernel_time = 0
         total_kernel_iters = 0
+
         pbar = tqdm(total=grid_total_size // grid_stream_size)
         
         for i in range(0, grid_total_size, grid_stream_size):
+            
             idx = jnp.arange(i, i + grid_stream_size)
             sub_grid = jnp.array(self.v_get_grid_item(idx, self.grid_size))
             contains = v_contains(self.env.target_spaces, sub_grid)
@@ -507,17 +499,18 @@ class Verifier:
             kernel_start = time.perf_counter()
             for start in range(0, sub_grid.shape[0], self.batch_size):
                 end = min(start + self.batch_size, sub_grid.shape[0])
-                f_batch = jnp.array(sub_grid[start:end])
+                grid_batch = jnp.array(sub_grid[start:end])
 
                 # TODO: later optimize this by filtering the entire stream first
                 l_batch = self.learner.l_state.apply_fn(
-                    self.learner.l_state.params, f_batch
+                    self.learner.l_state.params, grid_batch
                 ).flatten()
                 normalized_l_batch = self.normalize_rsm(l_batch, ub_init, domain_min)
                 less_than_p = normalized_l_batch - K < 1 / (1 - self.reach_prob)
                 if jnp.sum(less_than_p.astype(np.int32)) == 0:
                     continue
-                f_batch = f_batch[less_than_p]
+                
+                grid_batch = grid_batch[less_than_p]
                 l_batch = l_batch[less_than_p]
                 (
                     v,
@@ -526,25 +519,18 @@ class Verifier:
                     hard_violating_indices,
                 ) = self._check_dec_batch(
                     self.learner.l_state.params,
-                    self.learner.p_state.params,
-                    f_batch,
+                    grid_batch,
                     l_batch,
-                    K,
+                    K
                 )
-                # if i + grid_stream_size >= grid_total_size:
-                #     print("f_batch[-5:]: ", str(f_batch[-5:]))
-                #     print("l_batch[-5:]: ", str(l_batch[-5:]))
-                #     print("less_than_p[-5:]: ", str(less_than_p[-5:]))
                 hard_violations += hard_v
                 violations += v
                 if self.refinement_enabled and v > 0:
-                    refinement_buffer.append(f_batch[violating_indices])
-                # if v > 0:
-                #     violation_buffer.append(f_batch[violating_indices])
+                    refinement_buffer.append(grid_batch[violating_indices])
                 if hard_v > 0:
-                    hard_violation_buffer.append(f_batch[hard_violating_indices])
-                # grid_violating_indices.append(violating_indices)
+                    hard_violation_buffer.append(grid_batch[hard_violating_indices])
             pbar.update(1)
+
             if i > 0:
                 total_kernel_time += time.perf_counter() - kernel_start
                 total_kernel_iters += sub_grid.shape[0] // self.batch_size
@@ -554,8 +540,8 @@ class Verifier:
                 pbar.set_description(
                     f"kernel_t: {total_kernel_time*1e6/total_kernel_iters:0.2f}us/iter ({ints_per_sec:0.2f} Kints/s)"
                 )
-            if self.fail_check_fast and violations > 0:
-                break
+            # if self.fail_check_fast and violations > 0:
+                # break
         pbar.close()
         print(f"violations={violations}")
         print(f"hard_violations={hard_violations}")
@@ -563,14 +549,12 @@ class Verifier:
         self.train_buffer.extend(hard_violation_buffer)
 
         loop_time = time.perf_counter() - loop_start_time
+        
         if self.refinement_enabled and hard_violations == 0 and violations > 0:
             print(f"Zero hard violations -> refinement of {violations} soft violations")
             _perf_refine_buffer = time.perf_counter()
-            # grid_violating_indices = [np.array(g) for g in grid_violating_indices]
-            # grid_violating_indices = np.concatenate(grid_violating_indices)
             refinement_buffer = [np.array(g) for g in refinement_buffer]
             refinement_buffer = np.concatenate(refinement_buffer)
-            # refinement_buffer = state_grid[grid_violating_indices]
             print(
                 f"Took {time.perf_counter()-_perf_refine_buffer:0.2f}s to build refinement buffer"
             )
@@ -584,6 +568,7 @@ class Verifier:
                 return True, 0, info_dict
             else:
                 print("Refinement unsuccessful")
+        
         info_dict["avg_increase"] = (
             np.mean(avg_decrease) if len(avg_decrease) > 0 else 0
         )
@@ -599,33 +584,6 @@ class Verifier:
 
         return violations == 0, hard_violations, info_dict
 
-    # def debug_cavoid(self):
-    #     K = 0.01
-    #     f_batch = jnp.array([(1.0, -1), (1.0, -0.99), (0.99, -1.0), (0.99, -0.99)])
-    #     l_batch = self.learner.l_state.apply_fn(
-    #         self.learner.l_state.params, f_batch
-    #     ).flatten()
-    #     # a_batch = self.learner.p_state.apply_fn(self.learner.p_state.params, f_batch)
-    #     pmass, batched_grid_lb, batched_grid_ub = self.get_pmass_grid()
-    #     e = self.compute_expected_l(
-    #         self.learner.l_state.params,
-    #         f_batch,
-    #         pmass,
-    #         batched_grid_lb,
-    #         batched_grid_ub,
-    #     )
-    #     decrease = e + K - l_batch
-    #     violating_indices = decrease >= 0
-    #     v = violating_indices.astype(jnp.int32).sum()
-    #     hard_violating_indices = e - l_batch >= 0
-    #     hard_v = hard_violating_indices.astype(jnp.int32).sum()
-    #     print("f_batch=", str(f_batch))
-    #     print("l_batch=", str(l_batch))
-    #     print("e=", str(e))
-    #     print("violating_indices=", str(violating_indices))
-    #     # breakpoint()
-    #     return v, violating_indices, hard_v, hard_violating_indices
-
     def refine_grid(
         self, refinement_buffer, lipschitz_k, current_delta, ub_init, domain_min
     ):
@@ -634,16 +592,11 @@ class Verifier:
         pmass, batched_grid_lb, batched_grid_ub = self.get_pmass_grid()
         n_dims = self.env.observation_space.shape[0]
         batch_size = 10 if self.env.observation_space.shape[0] == 2 else 5
-        # if self._small_mem:
-        #     batch_size = batch_size // 2
         n = 10 if self.env.observation_space.shape[0] == 2 else 4
+
         template_batch, new_delta = self.get_refined_grid_template(current_delta, n)
-        # print(f"lipschitz_k={lipschitz_k}")
-        # print(f"current_delta={current_delta}")
-        # print(f"new_delta={new_delta}")
-        # new_delta = current_delta / (n - 1)
         K = jnp.float32(lipschitz_k * new_delta)
-        # print(f"K={K}")
+        
         template_batch = template_batch.reshape((1, -1, n_dims))
         for i in tqdm(range(int(np.ceil(refinement_buffer.shape[0] / batch_size)))):
             start = i * batch_size
@@ -670,7 +623,6 @@ class Verifier:
                 hard_violating_indices,
             ) = self._check_dec_batch(
                 self.learner.l_state.params,
-                self.learner.p_state.params,
                 r_batch,
                 l_batch,
                 K,

@@ -58,3 +58,7 @@ python3 rsm_loop.py --env lds_100 --skip_ppo --p_lip 4.0 --grid_factor 8 --batch
 
 After the conditions are checked by the verifier module, the RASM network is normalized such that the sup. of V at the initial set is 1 and the inf. of V on the entire domain is 0. 
 This normalization allows us to obtain even slightly better bounds than the verifier concluded (see Appendix F in the paper).
+
+## Additional
+
+If the noise is not additive, one needs to implement the interval propagation module for the evolution function $f$, i.e., given a fixed state $x$ and a range for $w$ compute the range for $f(x,w)$.

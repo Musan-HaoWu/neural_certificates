@@ -129,12 +129,16 @@ class Learner:
             min_at_unsafe = jnp.min(l_at_unsafe)
             min_at_target = jnp.min(l_at_target)
             
+
             # loss_decrease
-            # s_next = jnp.expand_dims(self.env.v_next(state, jax.random.split(rngs[0], len(state))), axis=1)
-            s_next = self.env.v_next(state, jax.random.split(rngs[0], len(state)))
+            N = 16
+            s_next_det = self.env.v_next(state)
+            sample_rngs = jax.random.split(rngs[0], N*len(state))
+            s_next = self.env.v_add_noise(jnp.repeat(s_next_det, N, axis=0), sample_rngs)
             s_next_fn = jax.vmap(l_state.apply_fn, in_axes=(None, 0))
-            l_next = s_next_fn(l_params, s_next)
-            # print(l_next.shape)
+            l_next = s_next_fn(l_state.params, s_next)
+            l_next = l_next.reshape(len(state), N)
+
             exp_l_next = jnp.mean(l_next, axis=1)
             dec_loss = jnp.mean(jnp.maximum(exp_l_next - l + self.eps, 0))
             loss = dec_loss 
@@ -176,6 +180,7 @@ class Learner:
         current_delta = jnp.float32(current_delta)
         batch_metrics = []
 
+        #???
         if isinstance(train_ds, tf.data.Dataset):
             iterator = train_ds.as_numpy_iterator()
         else:
