@@ -28,15 +28,15 @@ class Vandelpol(gym.Env):
         # domain + init + target + unsafe + action
 
         self.observation_space = spaces.Box(
-            low = np.array([-2.0, -2.0], dtype=jnp.float32),  
-            high = np.array([2.0, 2.0], dtype=jnp.float32),
+            low = np.array([-1.0, -1.0], dtype=jnp.float32),  
+            high = np.array([1.0, 1.0], dtype=jnp.float32),
             dtype = jnp.float32)
         self.action_space = None
 
         self.init_spaces = [
             spaces.Box(
-            low = np.array([-0.2, 0.6], dtype=jnp.float32),
-            high = np.array([0.2, 1.0], dtype=jnp.float32),
+            low = np.array([-0.2, 0.4], dtype=jnp.float32),
+            high = np.array([0.2, 0.6], dtype=jnp.float32),
             dtype=jnp.float32,
         )
         ]
@@ -49,16 +49,16 @@ class Vandelpol(gym.Env):
         ]
         self.unsafe_spaces = [
             spaces.Box(
-            low = np.array([-2.0, -1.0], dtype=jnp.float32), 
-            high = np.array([-1.5, 1.0], dtype=jnp.float32), 
+            low = np.array([-1.0, -1.0], dtype=jnp.float32), 
+            high = np.array([-0.6,-0.6], dtype=jnp.float32), 
             dtype=jnp.float32,
         )
         ]
         
         self.noise_coef = jnp.array([0.01, 0.02])        
         self.noise_bounds = jnp.array([[-1.0, -1.0], [1.0, 1.0]])
-        self.lipschitz_constant = 4.0
-        self.lipschitz_constant_h2 = 2.0
+        self.lipschitz_constant = 1.08
+        self.lipschitz_constant_h = 20.4
 
         self._max_steps = 200
         self._jax_rng = jax.random.PRNGKey(2025)

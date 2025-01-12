@@ -81,6 +81,19 @@ class TrainBuffer:
         return len(self.s[0])
 
     def as_tfds(self, batch_size=32):
+        """
+        Converts the stored data into a TensorFlow Dataset (tf.data.Dataset) with batching and prefetching.
+
+        Args:
+            batch_size (int): The size of the batches in which the dataset will be divided. Default is 32.
+
+        Returns:
+            tf.data.Dataset: A TensorFlow Dataset object containing the data, shuffled, batched, and prefetched.
+
+        Notes:
+            - If the dataset has been previously cached, it will return the cached dataset.
+            - The data is shuffled with a buffer size of 50000 before batching.
+        """
         if self._cached_ds is not None:
             return self._cached_ds
         train_s = np.concatenate(self.s, axis=0)
@@ -101,6 +114,7 @@ class Verifier:
         fail_check_fast, #???
         grid_factor, # decide grid size
         small_mem, # can be removed
+        debug = False,
     ):
         self.learner = learner
         self.env = env
@@ -132,7 +146,6 @@ class Verifier:
         #     self.grid_stream_size = 8 * 1024 * 1024
         
         self._cached_pmass_grid = None
-        self._cached_state_grid = None
         self._cached_state_grid = None
         self._debug_violations = None
         self.hard_constraint_violation_buffer = None
@@ -204,7 +217,6 @@ class Verifier:
                 retstep=True,
             )
             grid.append(samples.flatten() + new_delta * 0.5)
-            # grid.append(samples.flatten())
             new_deltas.append(new_delta)
         grid = jnp.meshgrid(*grid)
         grid = jnp.stack(grid, axis=1)
@@ -247,7 +259,7 @@ class Verifier:
         self._cached_pmass_grid = (pmass, batched_grid_lb, batched_grid_ub)
         return pmass, batched_grid_lb, batched_grid_ub
 
-    def get_unfiltered_grid(self, n=100):
+    def get_unfiltered_grid(self, n=200):
         '''
         Generate a grid of points in the observation space of the environment,
         with `n` points in each dimension. 
@@ -335,7 +347,7 @@ class Verifier:
         '''
         grid_center, grid_lb, grid_ub = self.get_unfiltered_grid(n)
         stepsize = grid_ub[0, 0] - grid_lb[0, 0]
-        contains = v_contains(self.env.target_spaces[0], grid_center)
+        contains = v_contains(self.env.target_spaces, grid_center)
         mask = np.logical_not(contains)
         grid_center = grid_center[mask]
         # assert grid_center.shape[0] > 0

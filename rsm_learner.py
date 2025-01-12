@@ -29,6 +29,7 @@ class Learner:
         gamma_decrease, #???
         reach_prob,
         softplus_l_output=True,
+        debug=False,
     ) -> None:
         self.env = env
         self.eps = jnp.float32(eps)
@@ -44,7 +45,7 @@ class Learner:
             l_hidden + [1], activation="relu", softplus_output=softplus_l_output
         )
         
-        self.l_state = create_train_state(l_net, jax.random.PRNGKey(1), obs_dim, 0.0005)
+        self.l_state = create_train_state(l_net, jax.random.PRNGKey(1), obs_dim, learning_rate=0.005)
         self.l_lip = jnp.float32(l_lip)
 
         self.rng = jax.random.PRNGKey(777)
@@ -101,11 +102,11 @@ class Learner:
         return jnp.concatenate(batch, axis=0)
     
     @partial(jax.jit, static_argnums=(0, ))
-    def train_step(self, l_state, state, lip, rng, current_delta):
+    def train_step(self, l_state, ds, lip, rng, current_delta):
         """
             Train for a single step.
             
-            state: train states
+            ds: train states
         """
         rngs = jax.random.split(rng, 4)
         
@@ -120,7 +121,7 @@ class Learner:
 
         def loss_fn(l_params):
             # l has softplus at output -> always negative
-            l = l_state.apply_fn(l_params, state)
+            l = l_state.apply_fn(l_params, ds)
             l_at_init = l_state.apply_fn(l_params, init_samples)
             l_at_unsafe = l_state.apply_fn(l_params, unsafe_samples)
             l_at_target = l_state.apply_fn(l_params, target_samples)
@@ -129,15 +130,14 @@ class Learner:
             min_at_unsafe = jnp.min(l_at_unsafe)
             min_at_target = jnp.min(l_at_target)
             
-
             # loss_decrease
             N = 16
-            s_next_det = self.env.v_next(state)
-            sample_rngs = jax.random.split(rngs[0], N*len(state))
+            s_next_det = self.env.v_next(ds)
+            sample_rngs = jax.random.split(rngs[0], N*len(ds))
             s_next = self.env.v_add_noise(jnp.repeat(s_next_det, N, axis=0), sample_rngs)
             s_next_fn = jax.vmap(l_state.apply_fn, in_axes=(None, 0))
             l_next = s_next_fn(l_state.params, s_next)
-            l_next = l_next.reshape(len(state), N)
+            l_next = l_next.reshape(len(ds), N)
 
             exp_l_next = jnp.mean(l_next, axis=1)
             dec_loss = jnp.mean(jnp.maximum(exp_l_next - l + self.eps, 0))

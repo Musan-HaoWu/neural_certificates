@@ -27,13 +27,13 @@ class RSMLoop:
         lip_factor,
         plot,
         jitter_grid,#???
-        soft_constraint, #???
-        train_p=True, #???
+        soft_constraint,
+        debug = False
     ):
         self.env = env
         self.learner = learner
         self.verifier = verifier
-
+        self.debug = debug
         self.soft_constraint = soft_constraint #???
         self.jitter_grid = jitter_grid #???
 
@@ -55,11 +55,11 @@ class RSMLoop:
             print("create grid.")
             train_ds, stepsize = self.verifier.get_domain_jitter_grid(n)#???
             current_delta = stepsize
-        else:
+        else: #default
             print("use train buffer.")
             train_ds = self.verifier.train_buffer.as_tfds(batch_size=4096)#???
             current_delta = self.prefill_delta
-        
+
         start_metrics = None
         num_epochs = 100 
 
@@ -341,6 +341,7 @@ if __name__ == "__main__":
         description='Learning a reach-avoid supermartingale neural network with normalization techniques',
         epilog='By Musan (Hao Wu) @ SKLCS, Institute of Software, UCAS'
     )
+    parser.add_argument("--debug", default=True, type=bool)
     # problem formulation    
     parser.add_argument("--env", default="vandelpol", help='control system')
     parser.add_argument("--timeout", default=60, type=int, help='max time limit in minutes') 
@@ -383,7 +384,7 @@ if __name__ == "__main__":
         env = Vandelpol()
     else:
         raise ValueError(f'Unknown environment "{args.env}"')
-    print(f'Control System: {args.env}')
+    print(f'Dynamical System: {args.env}')
     
     os.makedirs("checkpoints", exist_ok=True)
     os.makedirs("saved", exist_ok=True)
@@ -395,9 +396,10 @@ if __name__ == "__main__":
         l_hidden=[args.hidden] * args.num_layers,
         l_lip=args.l_lip,
         eps=args.eps,
-        # gamma_decrease=args.gamma_decrease,
+        gamma_decrease=args.gamma_decrease,
         reach_prob=args.reach_prob,
         softplus_l_output=args.square_l_output,
+        debug = args.debug,
     )
     
     verifier = Verifier(
@@ -408,6 +410,7 @@ if __name__ == "__main__":
         fail_check_fast=bool(args.fail_check_fast),
         grid_factor=args.grid_factor,
         small_mem=args.small_mem,
+        debug = args.debug,
     )
 
     if args.continue_rsm > 0:
@@ -422,6 +425,7 @@ if __name__ == "__main__":
         plot=args.plot,
         jitter_grid=bool(args.jitter_grid),#???
         soft_constraint=bool(args.soft_constraint),#???
+        debug = args.debug,
     )
 
     loop.plot_l(f"plots/{args.env}_start.png")
@@ -430,8 +434,3 @@ if __name__ == "__main__":
     print("SAT=", sat)
 
     loop.plot_l(f"plots/{args.env}_end.png")
-
-    # with open("info.log", "a") as f:
-    #     f.write("args=" + str(vars(args)) + "\n")
-    #     f.write("sat=" + str(sat) + "\n")
-    #     f.write("info=" + str(loop.info) + "\n\n\n") 7
