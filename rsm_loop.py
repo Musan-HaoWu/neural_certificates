@@ -8,7 +8,7 @@ from gymnasium import spaces
 from tqdm import tqdm
 
 from klax import lipschitz_l1_jax, triangular
-from rl_environments import Vandelpol
+from rl_environments import Vandelpol, Test2
 # from rl_environments import LDSEnv, InvertedPendulum, CollisionAvoidanceEnv, Vandelpol
 from rsm_learner import Learner
 from rsm_verifier import Verifier
@@ -332,47 +332,48 @@ if __name__ == "__main__":
     )
     parser.add_argument("--debug", default=True, type=bool)
     # problem formulation    
-    parser.add_argument("--env", default="vandelpol", help='control system')
+    # parser.add_argument("--env", default="vandelpol", help='system')
+    parser.add_argument("--env", default="test2", help='system')
     parser.add_argument("--timeout", default=60, type=int, help='max time limit in minutes') 
     parser.add_argument("--reach_prob", default=0.8, type=float, help='reach-avoid probability')
-    
+
+    parser.add_argument("--project", default=False, type=bool, help='Nomalize the system')
+
     # neural network and training
     parser.add_argument("--hidden", default=128, type=int, help='hidden neurons in each layer')
     parser.add_argument("--num_layers", default=2, type=int, help='number of hidden layers')
-
     # learner 
     parser.add_argument("--continue_rsm", type=int, default=0, help='use an existing network')
-    
+
     # verifier
-    parser.add_argument("--eps", default=0.05, type=float) # ???
-    parser.add_argument("--lip", default=0.01, type=float) # ???
+    parser.add_argument("--eps", default=0.01, type=float) # ???
+    parser.add_argument("--lip", default=0.1, type=float) # ???
+
+    
+
     # parser.add_argument("--p_lip", default=0.0, type=float) 
-    parser.add_argument("--l_lip", default=4.0, type=float) # ???
+    parser.add_argument("--l_lip", default=10.0, type=float) # ???
     parser.add_argument("--fail_check_fast", type=int, default=0)
     parser.add_argument("--grid_factor", default=1.0, type=float)
-
     parser.add_argument("--batch_size", default=512, type=int)
     # parser.add_argument("--ppo_iters", default=50, type=int)
     # parser.add_argument("--policy", default="policies/lds0_zero.jax")
-
     # parser.add_argument("--train_p", type=int, default=1)
     parser.add_argument("--square_l_output", default=True)
     parser.add_argument("--jitter_grid", type=int, default=0)
     parser.add_argument("--soft_constraint", type=int, default=1)
     parser.add_argument("--gamma_decrease", default=1.0, type=float)
-
     parser.add_argument("--debug_k0", action="store_true")
     parser.add_argument("--gen_plot", action="store_true")
     parser.add_argument("--no_refinement", action="store_true")
     parser.add_argument("--plot", action="store_true")
     parser.add_argument("--small_mem", action="store_true")
-
-
     args = parser.parse_args()
     if args.env == 'vandelpol':
         env = Vandelpol()
     else:
-        raise ValueError(f'Unknown environment "{args.env}"')
+        env = Test2()
+        # raise ValueError(f'Unknown environment "{args.env}"')
     print(f'Dynamical System: {args.env}')
     
     os.makedirs("checkpoints", exist_ok=True)
