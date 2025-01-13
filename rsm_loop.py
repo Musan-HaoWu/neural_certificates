@@ -45,20 +45,21 @@ class RSMLoop:
         self.info = {} 
 
     def train(self):
-        if self.jitter_grid:
-            if self.env.observation_space.shape[0] == 2:
-                n = 200
-            elif self.env.observation_space.shape[0] == 3:
-                n = 100
-            else:
-                n = 50
-            print("create grid.")
-            train_ds, stepsize = self.verifier.get_domain_jitter_grid(n)#???
-            current_delta = stepsize
-        else: #default
-            print("use train buffer.")
-            train_ds = self.verifier.train_buffer.as_tfds(batch_size=4096)#???
-            current_delta = self.prefill_delta
+        # if self.jitter_grid:
+        #     if self.env.observation_space.shape[0] == 2:
+        #         n = 200
+        #     elif self.env.observation_space.shape[0] == 3:
+        #         n = 100
+        #     else:
+        #         n = 50
+        #     print("create grid.")
+        #     train_ds, stepsize = self.verifier.get_domain_jitter_grid(n)#???
+        #     current_delta = stepsize
+        # else: #default
+        # print("use train buffer.")
+        
+        train_ds = self.verifier.train_buffer.as_tfds(batch_size=4096)
+        current_delta = self.prefill_delta
 
         start_metrics = None
         num_epochs = 100 
@@ -89,6 +90,7 @@ class RSMLoop:
         print(
             f"Trained on {len(self.verifier.train_buffer)} samples, start_loss={start_metrics['loss']:0.3g}, end_loss={metrics['loss']:0.3g}, start_violations={start_metrics['train_violations']:0.3g}, end_violations={metrics['train_violations']:0.3g} in {elapsed}"
         )
+        return metrics['loss'].astype(np.float32)
 
     def run(self, timeout):
         start_time = time.time()
@@ -110,7 +112,8 @@ class RSMLoop:
             print(f"\n## Iteration {self.iter} ({runtime // 60:0.0f}:{runtime % 60:02.0f} elapsed) ##")
             
             self.train()
-        
+            # self.plot_l(f"loop/{self.env.name}_{self.iter:04d}.png", rollout=False)
+
             K_f = self.env.lipschitz_constant
             K_l = lipschitz_l1_jax(self.learner.l_state.params).item()
             lipschitz_k = float(K_l * K_f) # to check
@@ -121,11 +124,12 @@ class RSMLoop:
             self.info["iter"] = self.iter
             self.info["runtime"] = runtime
 
+
             sat, hard_violations, info = self.verifier.check_dec_cond(lipschitz_k)
             for k, v in info.items():
                 self.info[k] = v
             print("info=", str(self.info), flush=True)
-            
+                
             # if the expected decrease condition is satisfied
             # then check other conditions
             # o.w. refine the grid
@@ -205,7 +209,7 @@ class RSMLoop:
         # print(trace)
         return np.stack(trace, axis=0)
 
-    def plot_l(self, filename):
+    def plot_l(self, filename, rollout=True):
         if self.env.observation_space.shape[0] > 2:
             print("Cannot plot in more than 2 dimensions")
             return
@@ -220,26 +224,27 @@ class RSMLoop:
         fig.colorbar(sc)
         ax.set_title(f"L at iter {self.iter} for {self.env.name}")
 
-        terminals_x, terminals_y = [], []
-        for i in range(5):
-            trace = self.rollout()
-            ax.plot(
-                trace[:, 0],
-                trace[:, 1],
-                color=sns.color_palette()[0],
-                zorder=2,
-                alpha=0.3,
-            )
-            ax.scatter(
-                trace[:, 0],
-                trace[:, 1],
-                color=sns.color_palette()[0],
-                zorder=2,
-                marker=".",
-            )
-            terminals_x.append(float(trace[-1, 0]))
-            terminals_y.append(float(trace[-1, 1]))
-        ax.scatter(terminals_x, terminals_y, color="white", marker="x", zorder=5)
+        if rollout:
+            terminals_x, terminals_y = [], []
+            for i in range(5):
+                trace = self.rollout()
+                ax.plot(
+                    trace[:, 0],
+                    trace[:, 1],
+                    color=sns.color_palette()[0],
+                    zorder=2,
+                    alpha=0.3,
+                )
+                ax.scatter(
+                    trace[:, 0],
+                    trace[:, 1],
+                    color=sns.color_palette()[0],
+                    zorder=2,
+                    marker=".",
+                )
+                terminals_x.append(float(trace[-1, 0]))
+                terminals_y.append(float(trace[-1, 1]))
+            ax.scatter(terminals_x, terminals_y, color="white", marker="x", zorder=5)
         # if self.verifier.hard_constraint_violation_buffer is not None:
         #     print(
         #         "self.verifier.hard_constraint_violation_buffer: ",
@@ -311,22 +316,6 @@ class RSMLoop:
                 target.low[1],
             ]
             ax.plot(x, y, color="green", alpha=0.5, zorder=7)
-        
-        # x = [
-        #     self.env.safe_space.low[0],
-        #     self.env.safe_space.high[0],
-        #     self.env.safe_space.high[0],
-        #     self.env.safe_space.low[0],
-        #     self.env.safe_space.low[0],
-        # ]
-        # y = [
-        #     self.env.safe_space.low[1],
-        #     self.env.safe_space.low[1],
-        #     self.env.safe_space.high[1],
-        #     self.env.safe_space.high[1],
-        #     self.env.safe_space.low[1],
-        # ]
-        # ax.plot(x, y, color="green", alpha=0.5, zorder=7)
 
         ax.set_xlim([self.env.observation_space.low[0], self.env.observation_space.high[0]])
         ax.set_ylim([self.env.observation_space.low[1], self.env.observation_space.high[1]])

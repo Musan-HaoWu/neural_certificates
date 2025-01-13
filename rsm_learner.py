@@ -46,6 +46,7 @@ class Learner:
         )
         
         self.l_state = create_train_state(l_net, jax.random.PRNGKey(1), obs_dim, learning_rate=0.005)
+        # old: 0.005
         self.l_lip = jnp.float32(l_lip)
 
         self.rng = jax.random.PRNGKey(777)
@@ -108,7 +109,7 @@ class Learner:
             
             ds: train states
         """
-        rngs = jax.random.split(rng, 4)
+        rngs = jax.random.split(rng, 5)
         
         # to evaluate the network 
         init_samples = self.sample_init(rngs[1], 256)
@@ -116,8 +117,10 @@ class Learner:
         target_samples = self.sample_target(rngs[3], 64)
         
         # Adds a bit of randomization to the grid
-        # s_random = jax.random.uniform(rngs[4], state.shape, minval=-0.5, maxval=0.5)
-        # state = state + current_delta * s_random
+        # s_random = jax.random.uniform(rngs[4], ds.shape, minval=-0.5, maxval=0.5)
+        # ds = ds + current_delta * s_random
+        
+        s_next_fn = jax.vmap(l_state.apply_fn, in_axes=(None, 0))
 
         def loss_fn(l_params):
             # l has softplus at output -> always negative
@@ -135,26 +138,25 @@ class Learner:
             s_next_det = self.env.v_next(ds)
             sample_rngs = jax.random.split(rngs[0], N*len(ds))
             s_next = self.env.v_add_noise(jnp.repeat(s_next_det, N, axis=0), sample_rngs)
-            s_next_fn = jax.vmap(l_state.apply_fn, in_axes=(None, 0))
+            # s_next_fn = jax.vmap(l_state.apply_fn, in_axes=(None, 0))
             l_next = s_next_fn(l_state.params, s_next)
             l_next = l_next.reshape(len(ds), N)
 
             exp_l_next = jnp.mean(l_next, axis=1)
             dec_loss = jnp.mean(jnp.maximum(exp_l_next - l + self.eps, 0))
             loss = dec_loss 
-
-            violations = (exp_l_next >= l).astype(jnp.float32)
+            
+            l_less = (l<= 1/(1-self.reach_prob)).astype(jnp.float32)
+            l_larger = (exp_l_next + self.eps >= l).astype(jnp.float32)
+            violations = jnp.logical_and(l_less, l_larger)
             violations = jnp.mean(violations)
 
             # loss_init
             loss += jnp.maximum(max_at_init - 1, 0)
-            
             # loss_unsafe
             loss += jnp.maximum( 1/(1-self.reach_prob) - min_at_unsafe , 0)
-
             # loss_lipschitz
             loss += lip * jnp.maximum(lipschitz_l1_jax(l_params) - self.l_lip, 0)  
-
             # loss_auxiliary
             #  guide the learner towards a candidate that attains the 
             #  global minimum in a state that is contained within the target set
@@ -180,18 +182,19 @@ class Learner:
         current_delta = jnp.float32(current_delta)
         batch_metrics = []
 
-        #???
-        if isinstance(train_ds, tf.data.Dataset):
-            iterator = train_ds.as_numpy_iterator()
-        else:
-            iterator = range(80)
-            train_ds = jnp.array(train_ds)
+        # if isinstance(train_ds, tf.data.Dataset):
+        #     iterator = train_ds.as_numpy_iterator()
+        # else:
+        #     iterator = range(80)
+        #     train_ds = jnp.array(train_ds)
         
+        iterator = train_ds.as_numpy_iterator()
         for state in iterator:
-            if isinstance(train_ds, tf.data.Dataset):
-                state = jnp.array(state)
-            else:
-                state = train_ds
+            # if isinstance(train_ds, tf.data.Dataset):
+            #     state = jnp.array(state)
+            # else:
+            #     state = train_ds
+            state = jnp.array(state)
             self.rng, rng = jax.random.split(self.rng, 2)
 
             new_l_state, metrics = self.train_step(

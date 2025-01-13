@@ -80,20 +80,7 @@ class TrainBuffer:
     def in_dim(self):
         return len(self.s[0])
 
-    def as_tfds(self, batch_size=32):
-        """
-        Converts the stored data into a TensorFlow Dataset (tf.data.Dataset) with batching and prefetching.
-
-        Args:
-            batch_size (int): The size of the batches in which the dataset will be divided. Default is 32.
-
-        Returns:
-            tf.data.Dataset: A TensorFlow Dataset object containing the data, shuffled, batched, and prefetched.
-
-        Notes:
-            - If the dataset has been previously cached, it will return the cached dataset.
-            - The data is shuffled with a buffer size of 50000 before batching.
-        """
+    def as_tfds(self, batch_size=512):
         if self._cached_ds is not None:
             return self._cached_ds
         train_s = np.concatenate(self.s, axis=0)
@@ -127,7 +114,7 @@ class Verifier:
         self.batch_size = batch_size
         self.refinement_enabled = True
         
-        self.grid_size = int(grid_factor * 500)
+        self.grid_size = int(grid_factor * 200)
         self.pmass_n = 10
         self.grid_stream_size = 1024 * 1024
         
