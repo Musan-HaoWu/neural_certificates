@@ -21,13 +21,19 @@ def project(x):
     '''
     return x/(jnp.sum(jnp.abs(x))+1)
 
+def v_project(x_list):
+    return jax.vmap(project)(x_list)
+
 def inverse_project(y):
     '''
     apply h1^-1 projection to point in [-1,1]^n
     '''
-    if jnp.sum(jnp.abs(y)) >= 1:
-        print("Domain Error")
+    # if jnp.sum(jnp.abs(y)) >= 1:
+    #     print("Domain Error") 
     return y/(1-jnp.sum(jnp.abs(y)))
+
+def v_inverse_project(y_list):
+    return jax.vmap(inverse_project)(y_list)
 
 def pretty_time(elapsed):
     if elapsed > 60 * 60:
@@ -214,43 +220,3 @@ def lipschitz_l1_jax(params):
         lipschitz_l1 *= jnp.max(jnp.sum(jnp.abs(v["kernel"]), axis=0))
 
     return lipschitz_l1
-
-
-# if __name__ == "__main__":
-
-#     learning_rate = 0.0005
-#     rng = jax.random.PRNGKey(0)
-#     rng, init_rng = jax.random.split(rng)
-#     layer_size = [64, 16, 5]
-#     model = MLP(layer_size)
-#     ibp_model = IBPMLP(layer_size)
-#     state = create_train_state(model, init_rng, 8, learning_rate)
-
-#     print("Lipschitz: ", compute_lipschitz(state.params))
-#     del init_rng  # Must not be used anymore.
-
-#     fake_x = jax.random.uniform(
-#         jax.random.PRNGKey(0), shape=(1, 8), minval=-1, maxval=1
-#     )
-#     fake_y = model.apply(state.params, fake_x)
-#     fake_x_lb = fake_x - 0.01
-#     fake_x_ub = fake_x + 0.01
-#     print("fake_x\n", fake_x)
-#     print("fake_x_lb\n", fake_x_lb)
-#     print("fake_x_ub\n", fake_x_ub)
-#     print("#### output ####")
-#     print("Fake y\n", fake_y)
-#     (fake_y_lb, fake_y_ub), mod_vars = ibp_model.apply(
-#         state.params, [fake_x_lb, fake_x_ub], mutable="intermediates"
-#     )
-#     print("Fake lb\n", fake_y_lb)
-#     print("Fake ub\n", fake_y_ub)
-
-#     print("diff", fake_y_ub - fake_y_lb)
-#     # print("sowed vars", mod_vars)
-
-#     # print("Params: ", state.params)
-#     # model = MLP([12, 8, 4])
-#     # batch = jnp.ones((32, 10))
-#     # variables = model.init(jax.random.PRNGKey(0), batch)
-#     # output = model.apply(variables, batch)
