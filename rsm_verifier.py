@@ -79,7 +79,7 @@ class TrainBuffer:
             self.append(e)
 
     def __len__(self):
-        if len(self.s) == 0:
+        if len(self.s) == 0: 
             return 0
         return sum([s.shape[0] for s in self.s])
 
@@ -89,7 +89,7 @@ class TrainBuffer:
 
     def as_tfds(self, rng, batch_size=512):
         train_s = np.concatenate(self.s, axis=0)   
-        train_s = np.unique(train_s, axis=0) 
+        # train_s = np.unique(train_s, axis=0) 
         print("Train set size: ", train_s.shape)  
         seeds = jax.random.randint(rng, minval=0, maxval=9, shape=(2,))
 

@@ -157,7 +157,7 @@ class Dense(nn.Module):
 
 class IBPMLP(nn.Module):
     features: Sequence[int]
-    activation: str = "relu"
+    activation: str = "relu"#
     softplus_output: bool = False
 
     @nn.compact

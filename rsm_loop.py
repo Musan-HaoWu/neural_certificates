@@ -107,7 +107,7 @@ class RSMLoop:
     
             self.info["lipschitz_k"] = lipschitz_k
             self.info["K_f"] = K_f
-            self.info["K_l"] = K_l
+            self.info["K_l"] = K_l 
             self.info["iter"] = self.iter
             self.info["runtime"] = runtime
 
@@ -179,7 +179,7 @@ class RSMLoop:
                         return True, best_reach_prob, best_params
 
             
-            if hard_violations == 0 and self.iter > 4 and self.iter % 2 == 0: #???
+            if hard_violations == 0: #???
                 print("Refining grid")
                 if self.env.observation_space.shape[0] == 2:
                     self.verifier.grid_size *= 2

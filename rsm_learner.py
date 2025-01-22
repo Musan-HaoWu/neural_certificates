@@ -312,4 +312,4 @@ class Learner:
             params = jax_load({"martingale": self.l_state,},filename)
             self.l_state = params["martingale"]
         except KeyError as e:
-            print("Error loading model")
+            print("Error loading model") 

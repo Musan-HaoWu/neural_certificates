@@ -123,7 +123,7 @@ class Vandelpol(gym.Env):
         add noise to the state
         '''
         # noise = triangular(rng, (2,))
-        noise = jax.random.normal(rng, (2,))
+        noise = jax.random.uniform(rng, (2,), minval=-1, maxval=1)
         noise = self.noise_coef * noise
         return state + noise
 
@@ -168,7 +168,7 @@ class Vandelpol(gym.Env):
             # marginal_pmass = triang.cdf(b[i], c=0.5, loc=loc, scale=scale) - triang.cdf(
             #     a[i], c=0.5, loc=loc, scale=scale
             # )
-            marginal_pmass = jax.scipy.stats.norm.cdf(b[i], loc=loc, scale=scale) - jax.scipy.stats.norm.cdf(
+            marginal_pmass = jax.scipy.stats.uniform.cdf(b[i], loc=loc, scale=scale) - jax.scipy.stats.uniform.cdf(
                 a[i], loc=loc, scale=scale
             )
             pmass *= marginal_pmass
